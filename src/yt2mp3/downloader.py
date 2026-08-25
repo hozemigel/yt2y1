@@ -24,6 +24,13 @@ def _progress_hook(d):
 def _postprocessor_hook(d):
     if d.get("status") == "finished":
         info = d.get("info_dict", {})
+        # postprocessor_hooks fires once per postprocessor in yt-dlp's chain
+        # (e.g. FFmpegExtractAudio, then an internal file-move step), each with
+        # a snapshot of info_dict taken before that stage ran. Only the stages
+        # that run after conversion see the final .mp3 path, so filter on the
+        # actual extension rather than printing every "finished" event.
+        if info.get("ext") != "mp3":
+            return
         path = info.get("filepath") or info.get("_filename", "")
         print(f"Saved: {path}")
 
