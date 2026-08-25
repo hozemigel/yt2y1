@@ -14,10 +14,18 @@ class DownloadOptions:
 
 def _progress_hook(d):
     if d.get("status") == "finished":
-        print(f"✓ Saved: {d.get('filename', '')}")
+        title = d.get("info_dict", {}).get("title", d.get("filename", ""))
+        print(f"Converting: {title}")
     elif d.get("status") == "downloading":
         title = d.get("info_dict", {}).get("title", d.get("filename", ""))
         print(f"Downloading: {title}", end="\r")
+
+
+def _postprocessor_hook(d):
+    if d.get("status") == "finished":
+        info = d.get("info_dict", {})
+        path = info.get("filepath") or info.get("_filename", "")
+        print(f"Saved: {path}")
 
 
 def build_ydl_opts(opts: DownloadOptions) -> dict:
@@ -32,6 +40,7 @@ def build_ydl_opts(opts: DownloadOptions) -> dict:
             }
         ],
         "progress_hooks": [_progress_hook],
+        "postprocessor_hooks": [_postprocessor_hook],
         "ignoreerrors": True,
     }
 

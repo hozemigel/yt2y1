@@ -47,9 +47,28 @@ def test_main_calls_download_with_parsed_options(monkeypatch):
 
     monkeypatch.setattr(cli, "download", fake_download)
 
-    rc = cli.main(["https://youtu.be/x", "-o", "out", "-q", "320"])
+    rc = cli.main([
+        "https://youtu.be/x",
+        "-o", "out",
+        "-q", "320",
+        "--filename-template", "%(id)s.%(ext)s",
+    ])
 
     assert rc == 0
     assert captured["opts"].url == "https://youtu.be/x"
     assert captured["opts"].output_dir == "out"
     assert captured["opts"].quality == "320"
+    assert captured["opts"].filename_template == "%(id)s.%(ext)s"
+
+
+def test_main_returns_nonzero_when_download_fails(monkeypatch):
+    monkeypatch.setattr(cli, "ensure_ffmpeg", lambda: None)
+
+    def fake_download(opts):
+        return 1
+
+    monkeypatch.setattr(cli, "download", fake_download)
+
+    rc = cli.main(["https://youtu.be/x"])
+
+    assert rc == 1
