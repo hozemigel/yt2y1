@@ -1,0 +1,76 @@
+import pytest
+from pathlib import Path
+from y1sync.models import TrackMeta
+from y1sync.naming import (
+    sanitize_component, safe_filename, resolve_collision, rename_file,
+)
+
+
+def test_maps_unicode_slash_lookalikes():
+    # U+29F8 appears in YouTube rips where a real slash was intended.
+    assert sanitize_component("7⧸4⧸2004") == "7-4-2004"
+
+
+def test_replaces_characters_illegal_on_fat32():
+    assert sanitize_component('a<b>c:d"e/f\\g|h?i*j') == "a-b-c-d-e-f-g-h-i-j"
+
+
+def test_strips_control_characters():
+    assert sanitize_component("a\x00b\x1fc") == "a-b-c"
+
+
+def test_collapses_whitespace_and_trims_dots():
+    assert sanitize_component("  Hello   World . ") == "Hello World"
+
+
+@pytest.mark.parametrize("reserved", ["CON", "PRN", "AUX", "NUL", "COM1", "LPT9"])
+def test_rejects_windows_reserved_names(reserved):
+    meta = TrackMeta(artist=reserved, title=reserved, album="X")
+    name = safe_filename(meta)
+    stem = name[:-len(".mp3")]
+    assert stem.upper() not in {"CON", "PRN", "AUX", "NUL", "COM1", "LPT9"}
+    assert name.endswith(".mp3")
+
+
+def test_reserved_name_check_is_case_insensitive():
+    meta = TrackMeta(artist="", title="aux", album="X")
+    assert safe_filename(meta) != "aux.mp3"
+
+
+def test_builds_artist_title_format():
+    meta = TrackMeta(artist="Tracy Chapman", title="Fast Car", album="Tracy Chapman")
+    assert safe_filename(meta) == "Tracy Chapman - Fast Car.mp3"
+
+
+def test_truncates_to_max_length():
+    meta = TrackMeta(artist="A" * 80, title="B" * 80, album="X")
+    name = safe_filename(meta, max_len=100)
+    assert len(name) <= 100 + len(".mp3")
+
+
+def test_resolve_collision_appends_counter():
+    taken = {"song.mp3"}
+    assert resolve_collision("song.mp3", taken) == "song (2).mp3"
+
+
+def test_resolve_collision_is_case_insensitive():
+    # FAT32 does not distinguish case, so neither may collision detection.
+    taken = {"song.mp3"}
+    assert resolve_collision("SONG.mp3", taken) == "SONG (2).mp3"
+
+
+def test_case_only_rename_succeeds(tmp_path):
+    # The bug this guards against: on a case-insensitive filesystem a naive
+    # os.rename from "Black" to "BLACK" is a silent no-op.
+    src = tmp_path / "Black - Wonderful Life.mp3"
+    src.write_bytes(b"data")
+    result = rename_file(src, "BLACK - Wonderful Life.mp3")
+    assert result.name == "BLACK - Wonderful Life.mp3"
+    assert result.read_bytes() == b"data"
+    assert len(list(tmp_path.iterdir())) == 1
+
+
+def test_rename_to_identical_name_is_a_noop(tmp_path):
+    src = tmp_path / "song.mp3"
+    src.write_bytes(b"data")
+    assert rename_file(src, "song.mp3") == src
