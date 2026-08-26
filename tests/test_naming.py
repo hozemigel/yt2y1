@@ -70,6 +70,35 @@ def test_case_only_rename_succeeds(tmp_path):
     assert len(list(tmp_path.iterdir())) == 1
 
 
+def test_case_only_rename_with_fat32_semantics(tmp_path, monkeypatch):
+    # test_case_only_rename_succeeds cannot catch the regression on case-sensitive
+    # filesystems (ext4, etc.) because "Black" → "BLACK" succeeds there. This test
+    # forces FAT32 semantics: a rename differing only by case is a silent no-op,
+    # and rename_file must detect this and use the two-step workaround.
+    original_rename = Path.rename
+
+    def fat32_rename(self, target):
+        """Mimic FAT32: case-only renames are silent no-ops."""
+        target_path = Path(target) if not isinstance(target, Path) else target
+        if self.name.lower() == target_path.name.lower() and self.name != target_path.name:
+            # Case-only change on FAT32: silently do nothing
+            return
+        # Normal rename
+        original_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", fat32_rename)
+
+    src = tmp_path / "Black - Wonderful Life.mp3"
+    src.write_bytes(b"data")
+    result = rename_file(src, "BLACK - Wonderful Life.mp3")
+
+    # Even though Path.rename silently did nothing for the case-only change,
+    # rename_file's two-step workaround should make the file have the new name
+    assert result.name == "BLACK - Wonderful Life.mp3"
+    assert result.read_bytes() == b"data"
+    assert len(list(tmp_path.iterdir())) == 1
+
+
 def test_rename_to_identical_name_is_a_noop(tmp_path):
     src = tmp_path / "song.mp3"
     src.write_bytes(b"data")
