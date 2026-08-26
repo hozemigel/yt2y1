@@ -66,6 +66,14 @@ def cmd_doctor() -> int:
     return 0
 
 
+def _existing_names(directory: Path) -> set[str]:
+    """Every name already present in a directory, MP3 or not."""
+    try:
+        return {entry.name for entry in directory.iterdir()}
+    except OSError:
+        return set()
+
+
 def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
     root = Path(folder)
     if not root.is_dir():
@@ -80,7 +88,11 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
     config = load_config()
     cache = ContentCache(CACHE_ROOT / "identify")
     auto_accepted: list[str] = []
-    taken: set[str] = set()
+    # Names already in use, per directory. Seeded from what is on disk, not
+    # from an empty set: the folder usually already holds files this tool
+    # named on an earlier run, and a name it does not know about is a name
+    # it would happily rename over.
+    taken: dict[Path, set[str]] = {}
     failures = 0
 
     for path in files:
@@ -101,8 +113,14 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
                 print(f"  skipped  {path.name}")
                 continue
 
-            new_name = resolve_collision(safe_filename(pick.meta), taken)
-            taken.add(new_name)
+            names = taken.setdefault(path.parent, _existing_names(path.parent))
+            # A file must not be blocked from keeping the name it already
+            # has, so re-scanning a tidy folder is a no-op rather than a
+            # cascade of " (2)" suffixes. The comparison is case-insensitive
+            # because FAT32 is.
+            others = {n for n in names if n.lower() != path.name.lower()}
+            new_name = resolve_collision(safe_filename(pick.meta), others)
+            names.add(new_name)
 
             if verbose:
                 print(f"  {path.name}\n      -> {new_name}  (confidence {pick.confidence:.2f})")

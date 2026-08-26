@@ -110,3 +110,51 @@ def test_scan_dry_run_does_not_write_cache(tmp_path, capsys, monkeypatch):
 
     identify_cache = cache_root / "identify"
     assert not list(identify_cache.glob("*.json"))
+
+
+def _stub_scan_side_effects(monkeypatch, tmp_path, candidate=None):
+    """Neutralise everything scan does except identification and renaming."""
+    pick = candidate or _confident_candidate()
+    monkeypatch.setattr(
+        "y1sync.cli.identify", lambda path, api_key=None, session=None: [pick]
+    )
+    monkeypatch.setattr("y1sync.cli.artwork_url_for", lambda meta, session=None: None)
+    monkeypatch.setattr(
+        "y1sync.cli.fetch_artwork", lambda url, cache_dir, session=None: None
+    )
+    monkeypatch.setattr("y1sync.cli.write_tags", lambda path, meta, artwork=None: None)
+    monkeypatch.setattr("y1sync.cli.CACHE_ROOT", tmp_path / "cache")
+
+
+def test_scan_never_overwrites_an_existing_file(tmp_path, capsys, monkeypatch):
+    # A folder holding an already-correct file plus a second rip of the
+    # same track. Both identify to "Artist - Title.mp3"; both must survive.
+    # The rip sorts first, so processing order alone cannot save the
+    # already-correct file: only consulting the filesystem can.
+    good = tmp_path / "Artist - Title.mp3"
+    good.write_bytes(b"the good copy")
+    rip = tmp_path / "Alpha rip.mp3"
+    rip.write_bytes(b"the second rip")
+
+    _stub_scan_side_effects(monkeypatch, tmp_path)
+    assert main(["scan", str(tmp_path)]) == 0
+
+    names = sorted(p.name for p in tmp_path.iterdir() if p.suffix == ".mp3")
+    assert names == ["Artist - Title (2).mp3", "Artist - Title.mp3"]
+    assert (tmp_path / "Artist - Title.mp3").read_bytes() == b"the good copy"
+    assert (tmp_path / "Artist - Title (2).mp3").read_bytes() == b"the second rip"
+
+
+def test_rescanning_an_already_correct_file_is_a_no_op(tmp_path, capsys, monkeypatch):
+    # The second run of scan on a folder it already tidied must not
+    # rename "Artist - Title.mp3" to "Artist - Title (2).mp3".
+    correct = tmp_path / "Artist - Title.mp3"
+    correct.write_bytes(b"audio")
+
+    _stub_scan_side_effects(monkeypatch, tmp_path)
+    assert main(["scan", str(tmp_path)]) == 0
+
+    assert [p.name for p in tmp_path.iterdir() if p.suffix == ".mp3"] == [
+        "Artist - Title.mp3"
+    ]
+    assert correct.read_bytes() == b"audio"

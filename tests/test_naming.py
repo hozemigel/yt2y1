@@ -103,3 +103,25 @@ def test_rename_to_identical_name_is_a_noop(tmp_path):
     src = tmp_path / "song.mp3"
     src.write_bytes(b"data")
     assert rename_file(src, "song.mp3") == src
+
+
+def test_rename_refuses_to_overwrite_a_different_file(tmp_path):
+    # Path.rename overwrites atomically and silently. A rename onto an
+    # occupied name would destroy the file already there.
+    victim = tmp_path / "Black - Wonderful Life.mp3"
+    victim.write_bytes(b"the good copy")
+    newcomer = tmp_path / "rip.mp3"
+    newcomer.write_bytes(b"the new rip")
+
+    with pytest.raises(FileExistsError):
+        rename_file(newcomer, "Black - Wonderful Life.mp3")
+
+    assert victim.read_bytes() == b"the good copy"
+    assert newcomer.read_bytes() == b"the new rip"
+
+
+def test_rename_to_the_same_name_is_a_no_op(tmp_path):
+    path = tmp_path / "Black - Wonderful Life.mp3"
+    path.write_bytes(b"audio")
+    assert rename_file(path, "Black - Wonderful Life.mp3") == path
+    assert path.read_bytes() == b"audio"

@@ -1,5 +1,6 @@
 """Filename construction that survives FAT32, NTFS and Windows alike."""
 
+import os
 import re
 from pathlib import Path
 
@@ -67,6 +68,11 @@ def rename_file(path: Path, new_name: str) -> Path:
     On a case-insensitive filesystem, renaming "Black" to "BLACK" is a
     no-op that silently does nothing. Routing through a temporary name
     forces the change to take effect.
+
+    Raises FileExistsError rather than renaming onto another file.
+    Path.rename overwrites atomically and silently, so without this guard
+    a second rip of a track already in the folder would destroy the copy
+    that was there — with no backup and no message.
     """
     target = path.with_name(new_name)
     if path.name == new_name:
@@ -76,5 +82,8 @@ def rename_file(path: Path, new_name: str) -> Path:
         path.rename(temp)
         temp.rename(target)
         return target
+    # lexists, not exists: a broken symlink occupies the name too.
+    if os.path.lexists(target):
+        raise FileExistsError(f"{target.name} already exists; refusing to overwrite it")
     path.rename(target)
     return target
