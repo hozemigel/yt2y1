@@ -1,0 +1,86 @@
+from pathlib import Path
+from y1sync.identify import (
+    guess_query_from_filename, parse_itunes_response, parse_acoustid_response,
+)
+
+
+def test_strips_youtube_suffixes():
+    name = Path("Djo - End Of Beginning (Official Audio).mp3")
+    assert guess_query_from_filename(name) == "Djo End Of Beginning"
+
+
+def test_strips_bracketed_youtube_debris():
+    name = Path("Goo Goo Dolls - Iris (Live in Buffalo) [Official Video].mp3")
+    assert "Official Video" not in guess_query_from_filename(name)
+    assert "Goo Goo Dolls" in guess_query_from_filename(name)
+
+
+def test_strips_lyrics_marker():
+    name = Path("Topic, Becky G - Sorry Papi (Lyrics).mp3")
+    assert guess_query_from_filename(name) == "Topic, Becky G Sorry Papi"
+
+
+def test_handles_filename_with_no_artist():
+    assert guess_query_from_filename(Path("Fast Car.mp3")) == "Fast Car"
+
+
+def test_parses_itunes_response_into_candidates():
+    payload = {"results": [{
+        "artistName": "The Cranberries",
+        "trackName": "Ode to My Family",
+        "collectionName": "No Need to Argue",
+        "releaseDate": "1994-10-03T07:00:00Z",
+        "primaryGenreName": "Rock",
+        "trackNumber": 1,
+        "artworkUrl100": "https://example.test/100x100bb.jpg",
+    }]}
+    cands = parse_itunes_response(payload)
+    assert len(cands) == 1
+    assert cands[0].meta.artist == "The Cranberries"
+    assert cands[0].meta.year == "1994"
+    assert cands[0].source == "itunes"
+    # Artwork is upgraded from the thumbnail the API returns.
+    assert cands[0].artwork_url.endswith("600x600bb.jpg")
+
+
+def test_itunes_candidates_never_claim_fingerprint_confidence():
+    payload = {"results": [{
+        "artistName": "A", "trackName": "B", "collectionName": "C",
+        "releaseDate": "2000-01-01T00:00:00Z", "primaryGenreName": "Pop",
+        "trackNumber": 1, "artworkUrl100": "https://example.test/100x100bb.jpg",
+    }]}
+    assert parse_itunes_response(payload)[0].source == "itunes"
+
+
+def test_parses_empty_itunes_response():
+    assert parse_itunes_response({"results": []}) == []
+
+
+def test_parses_acoustid_response_with_release_types():
+    payload = {"results": [{"score": 0.98, "recordings": [{
+        "title": "Dreams",
+        "artists": [{"name": "Fleetwood Mac"}],
+        "releasegroups": [
+            {"title": "Rumours", "type": "Album",
+             "secondarytypes": [], "releases": [
+                 {"date": {"year": 1977, "month": 2, "day": 4}, "status": "Official"}]},
+            {"title": "Greatest Hits", "type": "Album",
+             "secondarytypes": ["Compilation"], "releases": [
+                 {"date": {"year": 1988}, "status": "Official"}]},
+        ],
+    }]}]}
+    cands = parse_acoustid_response(payload, score=0.98)
+    albums = {c.meta.album for c in cands}
+    assert albums == {"Rumours", "Greatest Hits"}
+    compilation = next(c for c in cands if c.meta.album == "Greatest Hits")
+    assert compilation.secondary_types == ("Compilation",)
+    assert all(c.source == "acoustid" for c in cands)
+
+
+def test_acoustid_partial_dates_do_not_crash():
+    payload = {"results": [{"score": 0.9, "recordings": [{
+        "title": "T", "artists": [{"name": "A"}],
+        "releasegroups": [{"title": "G", "type": "Album", "secondarytypes": [],
+                           "releases": [{"date": {"year": 1990}, "status": "Official"}]}],
+    }]}]}
+    assert parse_acoustid_response(payload, score=0.9)[0].release_date == "1990-01-01"
