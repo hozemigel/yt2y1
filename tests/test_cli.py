@@ -209,3 +209,91 @@ def test_doctor_reports_the_cache_location(tmp_path, capsys, monkeypatch):
     # A remembered choice is sticky, so the user has to be told where to
     # clear it.
     assert "somecache" in capsys.readouterr().out
+
+
+def test_scan_recurses_into_subdirectories(tmp_path, capsys, monkeypatch):
+    # "y1sync scan ~/Music" on a library organised into folders must not
+    # report "No MP3 files".
+    nested = tmp_path / "Black" / "Wonderful Life"
+    nested.mkdir(parents=True)
+    (nested / "rip.mp3").write_bytes(b"nested audio")
+
+    _stub_scan_side_effects(monkeypatch, tmp_path)
+    assert main(["scan", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out.lower()
+    assert "no mp3" not in out
+    assert (nested / "Artist - Title.mp3").exists()
+
+
+def test_scan_collisions_are_scoped_to_each_directory(tmp_path, monkeypatch):
+    # Two files in different folders identify to the same name. Neither is
+    # in the other's way, so neither gets a " (2)" suffix.
+    for folder in ("one", "two"):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "rip.mp3").write_bytes(folder.encode())
+
+    _stub_scan_side_effects(monkeypatch, tmp_path)
+    assert main(["scan", str(tmp_path)]) == 0
+
+    assert (tmp_path / "one" / "Artist - Title.mp3").exists()
+    assert (tmp_path / "two" / "Artist - Title.mp3").exists()
+
+
+def test_scan_dry_run_previews_the_whole_tree(tmp_path, capsys, monkeypatch):
+    for folder in ("a", "b"):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "rip.mp3").write_bytes(folder.encode())
+
+    _stub_scan_side_effects(monkeypatch, tmp_path)
+    assert main(["scan", str(tmp_path), "--dry-run"]) == 0
+
+    out = capsys.readouterr().out
+    # Relative paths, so two files both called rip.mp3 stay distinguishable.
+    assert "a/rip.mp3" in out.replace("\\", "/")
+    assert "b/rip.mp3" in out.replace("\\", "/")
+    assert "2 file(s)" in out
+
+
+def _fake_device(tmp_path):
+    from y1sync.device import Y1_SIGNATURE
+    device = tmp_path / "Y1"
+    for folder in Y1_SIGNATURE:
+        (device / folder).mkdir(parents=True)
+    return device
+
+
+def test_sync_recurses_and_preserves_the_tree(tmp_path, capsys, monkeypatch):
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library"
+    (source / "Black").mkdir(parents=True)
+    (source / "Black" / "Wonderful Life.mp3").write_bytes(b"nested audio")
+    (source / "top.mp3").write_bytes(b"top audio")
+
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+
+    assert main(["sync", str(source)]) == 0
+
+    copied = device / "Music" / "Black" / "Wonderful Life.mp3"
+    assert copied.read_bytes() == b"nested audio"
+    assert (device / "Music" / "top.mp3").read_bytes() == b"top audio"
+
+
+def test_sync_dry_run_previews_the_whole_tree(tmp_path, capsys, monkeypatch):
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library"
+    (source / "Black").mkdir(parents=True)
+    (source / "Black" / "Wonderful Life.mp3").write_bytes(b"nested audio")
+
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+
+    assert main(["sync", str(source), "--dry-run"]) == 0
+
+    out = capsys.readouterr().out.replace("\\", "/")
+    assert "Black/Wonderful Life.mp3" in out
+    assert "1 file(s)" in out
+    # --dry-run writes nothing anywhere, including no backup.
+    assert not (tmp_path / "backups").exists()
+    assert not any((device / "Music").iterdir())

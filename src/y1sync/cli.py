@@ -79,13 +79,23 @@ def _existing_names(directory: Path) -> set[str]:
         return set()
 
 
+def _find_mp3s(root: Path) -> list[Path]:
+    """Every MP3 under root, at any depth, sorted for stable output.
+
+    A library organised into artist/album folders is the normal case, not
+    an edge case: iterdir() alone would miss almost everything a real
+    music collection contains.
+    """
+    return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".mp3")
+
+
 def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
     root = Path(folder)
     if not root.is_dir():
         print(f"Not a folder: {root}")
         return 1
 
-    files = sorted(p for p in root.iterdir() if p.suffix.lower() == ".mp3")
+    files = _find_mp3s(root)
     if not files:
         print(f"No MP3 files in {root}")
         return 0
@@ -96,9 +106,12 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
     # Names already in use, per directory. Seeded from what is on disk, not
     # from an empty set: the folder usually already holds files this tool
     # named on an earlier run, and a name it does not know about is a name
-    # it would happily rename over.
+    # it would happily rename over. Keyed by parent directory, so two
+    # subfolders that both produce "Artist - Title.mp3" never collide with
+    # each other: only files sharing an actual folder compete for a name.
     taken: dict[Path, set[str]] = {}
     failures = 0
+    previewed = 0
 
     for path in files:
         try:
@@ -142,7 +155,9 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
                 print(f"  {path.name}\n      -> {new_name}  (confidence {pick.confidence:.2f})")
 
             if dry_run:
-                print(f"  would tag and rename  {path.name} -> {new_name}")
+                rel = path.relative_to(root)
+                print(f"  would tag and rename  {rel} -> {new_name}")
+                previewed += 1
                 continue
 
             # AcoustID candidates carry no artwork URL; look one up.
@@ -154,6 +169,9 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
         except Exception as exc:
             failures += 1
             print(f"  FAILED   {path.name}: {exc}")
+
+    if dry_run:
+        print(f"\n{previewed} file(s) would be tagged and renamed.")
 
     if auto_accepted:
         print("\nAuto-accepted ambiguous tracks (--yes):")
@@ -179,12 +197,13 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
         return 1
 
     device = devices[0]
-    files = sorted(p for p in source.iterdir() if p.suffix.lower() == ".mp3")
+    files = _find_mp3s(source)
     print(f"Device: {device}")
 
     if dry_run:
         for path in files:
-            print(f"  would copy  {path.name}")
+            print(f"  would copy  {path.relative_to(source)}")
+        print(f"\n{len(files)} file(s) would be copied.")
         return 0
 
     backup = backup_device(device, BACKUP_ROOT)
@@ -192,13 +211,17 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
 
     failures = 0
     for path in files:
+        # The tree found under the source folder is preserved on the
+        # device rather than flattened: two files both called "rip.mp3"
+        # in different album folders must not collide in Music/.
+        rel = path.relative_to(source)
         try:
-            safe_copy(path, device / "Music" / path.name)
+            safe_copy(path, device / "Music" / rel)
             if verbose:
-                print(f"  copied   {path.name}")
+                print(f"  copied   {rel}")
         except Exception as exc:
             failures += 1
-            print(f"  FAILED   {path.name}: {exc}")
+            print(f"  FAILED   {rel}: {exc}")
 
     print(f"Copied {len(files) - failures} file(s). Safe to disconnect.")
     if failures:
