@@ -1,4 +1,6 @@
 # tests/test_device.py
+import os
+
 import pytest
 from pathlib import Path
 from y1sync.device import (
@@ -43,6 +45,19 @@ def test_rejects_a_missing_path(tmp_path):
     assert looks_like_y1(tmp_path / "nope") is False
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permission bits")
+def test_rejects_a_directory_it_cannot_read(tmp_path):
+    # A FAT volume the user cannot read (e.g. a root-owned /boot/efi on
+    # Linux) must be reported as "not a Y1", not crash the scan.
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    blocked.chmod(0o000)
+    try:
+        assert looks_like_y1(blocked) is False
+    finally:
+        blocked.chmod(0o755)
+
+
 def test_finds_a_matching_partition(fake_y1):
     found = find_devices([FakePartition(fake_y1)])
     assert found == [fake_y1]
@@ -71,6 +86,15 @@ def test_backup_never_writes_to_the_device(fake_y1, tmp_path):
     assert sorted(p.name for p in fake_y1.iterdir()) == before
 
 
+def test_backup_refuses_a_destination_inside_the_device(fake_y1):
+    # A backup destination under the device tree would write the backup
+    # onto the very thing being backed up.
+    before = sorted(p.name for p in fake_y1.iterdir())
+    with pytest.raises(ValueError):
+        backup_device(fake_y1, fake_y1 / "backup_on_device")
+    assert sorted(p.name for p in fake_y1.iterdir()) == before
+
+
 def test_safe_copy_writes_the_file(tmp_path):
     src = tmp_path / "src.mp3"
     src.write_bytes(b"payload")
@@ -94,3 +118,21 @@ def test_safe_copy_overwrites_atomically(tmp_path):
     dst.write_bytes(b"old")
     safe_copy(src, dst)
     assert dst.read_bytes() == b"new"
+
+
+def test_safe_copy_cleans_up_the_temp_file_after_a_failed_copy(tmp_path, monkeypatch):
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"new")
+    dst = tmp_path / "dst.mp3"
+    dst.write_bytes(b"old")
+
+    def broken_fsync(fd):
+        raise OSError("simulated interruption")
+
+    monkeypatch.setattr(os, "fsync", broken_fsync)
+
+    with pytest.raises(OSError):
+        safe_copy(src, dst)
+
+    assert dst.read_bytes() == b"old"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["dst.mp3", "src.mp3"]

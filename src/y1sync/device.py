@@ -25,11 +25,22 @@ BACKUP_FOLDERS = ("Music", "Themes")
 
 
 def looks_like_y1(path: Path) -> bool:
-    """True when every folder in the Y1 signature is present."""
+    """True when every folder in the Y1 signature is present.
+
+    Any volume this process cannot inspect (permission denied, a stale
+    mount, or any other OS-level failure) is definitively not a usable
+    Y1, so it is treated as a plain False rather than letting the error
+    propagate. This matters on ordinary Linux desktops: an unrelated FAT
+    volume like /boot/efi can be root-owned, and find_devices() must be
+    able to walk past it without crashing.
+    """
     path = Path(path)
-    if not path.is_dir():
+    try:
+        if not path.is_dir():
+            return False
+        return all((path / folder).is_dir() for folder in Y1_SIGNATURE)
+    except (PermissionError, OSError):
         return False
-    return all((path / folder).is_dir() for folder in Y1_SIGNATURE)
 
 
 def find_devices(partitions=None) -> list[Path]:
@@ -57,9 +68,22 @@ def backup_device(device: Path, dest_root: Path) -> Path:
     Backups go to local storage, never to the device: the device may be
     full, failing, or the very thing being repaired.
     """
-    device = Path(device)
+    device = Path(device).resolve()
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     destination = Path(dest_root) / device.name / stamp
+
+    # Resolve before comparing so a relative path, a ".." segment or a
+    # symlink cannot slip a destination inside the device tree past this
+    # check. Writing the backup onto the device being backed up would
+    # silently corrupt the very thing it is meant to protect.
+    resolved_destination = destination.resolve()
+    if resolved_destination == device or device in resolved_destination.parents:
+        raise ValueError(
+            f"backup destination {resolved_destination} is inside the "
+            f"device tree {device}; refusing to write the backup onto "
+            f"the device it is backing up"
+        )
+
     destination.mkdir(parents=True, exist_ok=True)
     for folder in BACKUP_FOLDERS:
         source = device / folder
@@ -79,11 +103,18 @@ def safe_copy(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     temp = dst.with_name(f".y1sync-{dst.name}.part")
 
-    with open(src, "rb") as reader, open(temp, "wb") as writer:
-        shutil.copyfileobj(reader, writer)
-        writer.flush()
-        # fsync, not os.sync: os.sync does not exist on Windows, and this
-        # guarantees the specific file rather than something global.
-        os.fsync(writer.fileno())
+    try:
+        with open(src, "rb") as reader, open(temp, "wb") as writer:
+            shutil.copyfileobj(reader, writer)
+            writer.flush()
+            # fsync, not os.sync: os.sync does not exist on Windows, and this
+            # guarantees the specific file rather than something global.
+            os.fsync(writer.fileno())
+    except BaseException:
+        # An interrupted copy must not leave a stray .part file behind,
+        # and the destination's existing bytes must be untouched since
+        # the rename below never happens.
+        temp.unlink(missing_ok=True)
+        raise
 
     os.replace(temp, dst)
