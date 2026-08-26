@@ -68,7 +68,10 @@ def test_sync_without_a_device_fails(tmp_path, capsys, monkeypatch):
 
 def test_scan_continues_after_one_file_fails(tmp_path, capsys, monkeypatch):
     for name in ("a.mp3", "bad.mp3", "c.mp3"):
-        (tmp_path / name).write_bytes(b"")
+        # Distinct content per file: ContentCache keys on content hash, so
+        # identical (empty) files would share a cache entry and mask
+        # whether identify() was actually called for each one.
+        (tmp_path / name).write_bytes(name.encode())
 
     def fake_identify(path, api_key=None, session=None):
         if path.name == "bad.mp3":
