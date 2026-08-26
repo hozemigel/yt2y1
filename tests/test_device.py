@@ -1,0 +1,96 @@
+# tests/test_device.py
+import pytest
+from pathlib import Path
+from y1sync.device import (
+    Y1_SIGNATURE, looks_like_y1, find_devices, backup_device, safe_copy,
+)
+
+
+@pytest.fixture
+def fake_y1(tmp_path):
+    """A directory carrying the Y1 folder signature."""
+    root = tmp_path / "Y1"
+    for folder in Y1_SIGNATURE:
+        (root / folder).mkdir(parents=True)
+    (root / "Music" / "song.mp3").write_bytes(b"audio")
+    return root
+
+
+class FakePartition:
+    def __init__(self, mountpoint, fstype="vfat"):
+        self.mountpoint = str(mountpoint)
+        self.fstype = fstype
+        self.device = "/dev/fake"
+        self.opts = "rw"
+
+
+def test_recognises_the_folder_signature(fake_y1):
+    assert looks_like_y1(fake_y1) is True
+
+
+def test_rejects_an_unrelated_directory(tmp_path):
+    (tmp_path / "Documents").mkdir()
+    assert looks_like_y1(tmp_path) is False
+
+
+def test_rejects_a_partial_signature(tmp_path):
+    # A USB stick that happens to contain Music/ is not a Y1.
+    (tmp_path / "Music").mkdir()
+    assert looks_like_y1(tmp_path) is False
+
+
+def test_rejects_a_missing_path(tmp_path):
+    assert looks_like_y1(tmp_path / "nope") is False
+
+
+def test_finds_a_matching_partition(fake_y1):
+    found = find_devices([FakePartition(fake_y1)])
+    assert found == [fake_y1]
+
+
+def test_ignores_non_fat_filesystems(fake_y1):
+    # An ext4 volume with these folders is somebody's hard drive.
+    assert find_devices([FakePartition(fake_y1, fstype="ext4")]) == []
+
+
+def test_accepts_fat32_under_any_platform_name(fake_y1):
+    for fstype in ("vfat", "msdos", "FAT32", "fat32"):
+        assert find_devices([FakePartition(fake_y1, fstype=fstype)]) == [fake_y1]
+
+
+def test_backup_copies_music_and_themes(fake_y1, tmp_path):
+    (fake_y1 / "Themes" / "theme.png").write_bytes(b"png")
+    destination = backup_device(fake_y1, tmp_path / "backups")
+    assert (destination / "Music" / "song.mp3").read_bytes() == b"audio"
+    assert (destination / "Themes" / "theme.png").read_bytes() == b"png"
+
+
+def test_backup_never_writes_to_the_device(fake_y1, tmp_path):
+    before = sorted(p.name for p in fake_y1.iterdir())
+    backup_device(fake_y1, tmp_path / "backups")
+    assert sorted(p.name for p in fake_y1.iterdir()) == before
+
+
+def test_safe_copy_writes_the_file(tmp_path):
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "out" / "dst.mp3"
+    safe_copy(src, dst)
+    assert dst.read_bytes() == b"payload"
+
+
+def test_safe_copy_leaves_no_temporary_file(tmp_path):
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "dst.mp3"
+    safe_copy(src, dst)
+    assert [p.name for p in tmp_path.iterdir()] == ["src.mp3", "dst.mp3"]
+
+
+def test_safe_copy_overwrites_atomically(tmp_path):
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"new")
+    dst = tmp_path / "dst.mp3"
+    dst.write_bytes(b"old")
+    safe_copy(src, dst)
+    assert dst.read_bytes() == b"new"
