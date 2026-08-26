@@ -10,14 +10,9 @@ else:  # tomllib landed in 3.11; tomli is the identical backport.
 
 from pathlib import Path
 
-DEFAULT_ARTWORK_SIZE = 600
-
-
 @dataclass(frozen=True)
 class Config:
     acoustid_key: str | None = None
-    artwork_size: int = DEFAULT_ARTWORK_SIZE
-    music_dir: str | None = None
 
 
 def default_config_path() -> Path:
@@ -37,8 +32,4 @@ def load_config(path: Path | None = None) -> Config:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (tomllib.TOMLDecodeError, OSError):
         return Config()
-    return Config(
-        acoustid_key=data.get("acoustid_key"),
-        artwork_size=data.get("artwork_size", DEFAULT_ARTWORK_SIZE),
-        music_dir=data.get("music_dir"),
-    )
+    return Config(acoustid_key=data.get("acoustid_key"))

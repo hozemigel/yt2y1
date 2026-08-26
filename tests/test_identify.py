@@ -52,6 +52,18 @@ def test_itunes_candidates_never_claim_fingerprint_confidence():
     assert parse_itunes_response(payload)[0].source == "itunes"
 
 
+def test_keeps_a_cover_credit_that_merely_starts_with_a_noise_word():
+    # "Audioslave" begins with "audio". Stripping it would query a cover
+    # as though it were the original recording.
+    name = Path("Radioactive (Audioslave Cover).mp3")
+    assert "Audioslave" in guess_query_from_filename(name)
+
+
+def test_still_strips_a_real_noise_marker():
+    name = Path("Some Song (Official Audio).mp3")
+    assert guess_query_from_filename(name) == "Some Song"
+
+
 def test_parses_empty_itunes_response():
     assert parse_itunes_response({"results": []}) == []
 
@@ -75,6 +87,23 @@ def test_parses_acoustid_response_with_release_types():
     compilation = next(c for c in cands if c.meta.album == "Greatest Hits")
     assert compilation.secondary_types == ("Compilation",)
     assert all(c.source == "acoustid" for c in cands)
+
+
+def test_each_acoustid_result_keeps_its_own_score():
+    # A weak second match must not inherit a strong first match's
+    # confidence, or it could be auto-applied without review.
+    def result(title, score):
+        return {"score": score, "recordings": [{
+            "title": title, "artists": [{"name": "A"}],
+            "releasegroups": [{"title": title, "type": "Album",
+                               "secondarytypes": [], "releases": [
+                                   {"date": {"year": 1990}, "status": "Official"}]}],
+        }]}
+
+    payload = {"results": [result("Strong", 0.99), result("Weak", 0.42)]}
+    by_title = {c.meta.title: c.confidence for c in parse_acoustid_response(payload)}
+    assert by_title["Strong"] == 0.99
+    assert by_title["Weak"] == 0.42
 
 
 def test_acoustid_partial_dates_do_not_crash():
