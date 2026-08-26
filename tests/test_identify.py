@@ -1,6 +1,7 @@
 from pathlib import Path
 from y1sync.identify import (
-    guess_query_from_filename, parse_itunes_response, parse_acoustid_response,
+    ACOUSTID_ENDPOINT, ITUNES_ENDPOINT, guess_query_from_filename, identify,
+    parse_itunes_response, parse_acoustid_response,
 )
 
 
@@ -113,3 +114,111 @@ def test_acoustid_partial_dates_do_not_crash():
                            "releases": [{"date": {"year": 1990}, "status": "Official"}]}],
     }]}]}
     assert parse_acoustid_response(payload, score=0.9)[0].release_date == "1990-01-01"
+
+
+# --- Routing regression tests ------------------------------------------
+#
+# These cover the half of the project's motivating failures that ranking
+# cannot reach. Shaggy's "Angel" and Black's "Wonderful Life" were
+# misidentified because the lookup guessed from the filename: one
+# returned a 2020 re-recording in place of the 2000 original, the other a
+# different artist entirely. Only a fingerprint distinguishes them,
+# because the audio itself differs. Without these tests, deleting the
+# AcoustID branch from identify() would keep the suite green.
+
+
+class RoutingSession:
+    """Records which endpoints were called and replays canned payloads."""
+
+    def __init__(self, payloads):
+        self.payloads = payloads
+        self.calls = []
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append(url)
+        payload = self.payloads.get(url, {})
+        session = self
+
+        class Response:
+            ok = True
+
+            @staticmethod
+            def json():
+                return payload
+
+        return Response()
+
+
+SHAGGY_ACOUSTID = {"results": [{"score": 0.97, "recordings": [{
+    "title": "Angel (feat. Rayvon)",
+    "artists": [{"name": "Shaggy"}],
+    "releasegroups": [{"title": "Hot Shot", "type": "Album",
+                       "secondarytypes": [], "releases": [
+                           {"date": {"year": 2000, "month": 8, "day": 8},
+                            "status": "Official"}]}],
+}]}]}
+
+SHAGGY_ITUNES = {"results": [{
+    "artistName": "Shaggy",
+    "trackName": "Angel (Hot Shot 2020) [feat. Sting]",
+    "collectionName": "Hot Shot 2020 (Deluxe Edition)",
+    "releaseDate": "2020-01-01T00:00:00Z",
+    "primaryGenreName": "Reggae",
+    "trackNumber": 6,
+    "artworkUrl100": "https://example.test/100x100bb.jpg",
+}]}
+
+
+def test_fingerprint_route_beats_the_filename_guess(monkeypatch):
+    # The real failure: a filename lookup returned the 2020 re-recording
+    # with Sting; the file was the 2000 original with Rayvon.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (216, "AQADtEmkRSk"))
+    session = RoutingSession({ACOUSTID_ENDPOINT: SHAGGY_ACOUSTID,
+                              ITUNES_ENDPOINT: SHAGGY_ITUNES})
+
+    found = identify(Path("Shaggy - Angel (Lyrics) Ft. Rayvon.mp3"),
+                     api_key="key", session=session)
+
+    assert [c.source for c in found] == ["acoustid"]
+    assert found[0].meta.album == "Hot Shot"
+    assert found[0].meta.year == "2000"
+    # iTunes must never have been consulted once the fingerprint matched.
+    assert ITUNES_ENDPOINT not in session.calls
+
+
+def test_without_an_api_key_it_falls_back_to_the_filename(monkeypatch):
+    # No key means no fingerprint route at all, so the candidate is a
+    # filename guess and is marked as one for review.
+    def explode(path):
+        raise AssertionError("fingerprinting must not run without a key")
+
+    monkeypatch.setattr("y1sync.identify.fingerprint", explode)
+    session = RoutingSession({ITUNES_ENDPOINT: SHAGGY_ITUNES})
+
+    found = identify(Path("Shaggy - Angel (Lyrics) Ft. Rayvon.mp3"), session=session)
+
+    assert [c.source for c in found] == ["itunes"]
+    assert session.calls == [ITUNES_ENDPOINT]
+
+
+def test_falls_back_when_the_fingerprint_finds_nothing(monkeypatch):
+    # chromaprint installed but the recording is unknown to AcoustID.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (216, "AQADtEmkRSk"))
+    session = RoutingSession({ACOUSTID_ENDPOINT: {"results": []},
+                              ITUNES_ENDPOINT: SHAGGY_ITUNES})
+
+    found = identify(Path("Shaggy - Angel.mp3"), api_key="key", session=session)
+
+    assert [c.source for c in found] == ["itunes"]
+    assert session.calls == [ACOUSTID_ENDPOINT, ITUNES_ENDPOINT]
+
+
+def test_falls_back_when_chromaprint_is_missing(monkeypatch):
+    # fingerprint() returns None when fpcalc is not installed.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: None)
+    session = RoutingSession({ITUNES_ENDPOINT: SHAGGY_ITUNES})
+
+    found = identify(Path("Shaggy - Angel.mp3"), api_key="key", session=session)
+
+    assert [c.source for c in found] == ["itunes"]
+    assert session.calls == [ITUNES_ENDPOINT]
