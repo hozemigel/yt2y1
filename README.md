@@ -25,6 +25,14 @@ not guess.
 
 ## Install
 
+Until the first PyPI release, install from source:
+
+```bash
+pip install git+https://github.com/lukamilicevic/y1sync
+```
+
+Once published, this becomes:
+
 ```bash
 uv tool install y1sync    # or: pipx install y1sync
 ```
@@ -48,7 +56,14 @@ y1sync scan ~/Music        # identify, tag and rename
 y1sync sync ~/Music        # copy to the Y1
 ```
 
-Add `--dry-run` to any command to see what would change without writing.
+Add `--dry-run` to `scan` or `sync` to see what would change without
+writing anything:
+
+```bash
+y1sync scan ~/Music --dry-run
+```
+
+The flag belongs to the subcommand, so it goes after it.
 
 ## Safety
 

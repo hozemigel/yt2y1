@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/<owner>/y1sync
+git clone https://github.com/lukamilicevic/y1sync
 cd y1sync
 pip install -e ".[dev]"
 pytest
