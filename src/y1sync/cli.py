@@ -56,6 +56,11 @@ def cmd_doctor() -> int:
     key_status = "configured" if config.acoustid_key else "NOT CONFIGURED"
     print(f"  {'API key':8} {key_status}   (AcoustID)")
 
+    # Identifications and the answers to review questions are remembered
+    # here, so a wrong answer stays wrong until this is deleted.
+    print(f"\n  Cache    {CACHE_ROOT}")
+    print("           Delete it to re-identify tracks and be asked again.")
+
     if not config.acoustid_key or not shutil.which("fpcalc"):
         print("\nWithout chromaprint and an AcoustID key, tracks are identified")
         print("from their filenames alone and every one needs manual review.")
@@ -97,21 +102,32 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
 
     for path in files:
         try:
-            candidates = cache.get(path)
-            if candidates is None:
+            entry = cache.get(path)
+            if entry is None:
                 candidates = identify(path, config.acoustid_key)
-                if not dry_run:
-                    cache.put(path, candidates)
-
-            pick, needs_review = decide(candidates)
-            if needs_review and not yes:
-                pick = choose_candidate(path, candidates)
-            elif needs_review and pick is not None:
-                auto_accepted.append(f"{path.name} -> {pick.meta.album}")
+                pick = None
+            else:
+                candidates, pick = entry.candidates, entry.choice
 
             if pick is None:
+                pick, needs_review = decide(candidates)
+                if needs_review and not yes:
+                    pick = choose_candidate(path, candidates)
+                elif needs_review and pick is not None:
+                    auto_accepted.append(f"{path.name} -> {pick.meta.album}")
+
+            if pick is None:
+                # A skip is not recorded: the user may be waiting on
+                # chromaprint or a better answer, and a remembered skip
+                # would hide the track from every future run.
                 print(f"  skipped  {path.name}")
                 continue
+
+            if not dry_run:
+                # Recorded before tagging, so an interruption later does not
+                # cost the user the answer they just gave. The key is the
+                # audio payload, which tagging does not change.
+                cache.put(path, candidates, choice=pick)
 
             names = taken.setdefault(path.parent, _existing_names(path.parent))
             # A file must not be blocked from keeping the name it already

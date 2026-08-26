@@ -158,3 +158,54 @@ def test_rescanning_an_already_correct_file_is_a_no_op(tmp_path, capsys, monkeyp
         "Artist - Title.mp3"
     ]
     assert correct.read_bytes() == b"audio"
+
+
+def _ambiguous_candidates() -> list[Candidate]:
+    """Two releases of one recording: decide() must route this to review."""
+    base = _confident_candidate()
+    other = Candidate(
+        meta=TrackMeta(artist="Artist", title="Title", album="Greatest Hits"),
+        confidence=0.95,
+        source="acoustid",
+        release_group_type="Album",
+        secondary_types=("Compilation",),
+        release_status="Official",
+        release_date="1995-01-01",
+        artwork_url=None,
+    )
+    return [base, other]
+
+
+def test_scan_does_not_re_ask_a_question_already_answered(tmp_path, monkeypatch):
+    (tmp_path / "rip.mp3").write_bytes(b"some audio")
+    _stub_scan_side_effects(monkeypatch, tmp_path)
+
+    lookups: list[str] = []
+    prompts: list[str] = []
+
+    def counting_identify(path, api_key=None, session=None):
+        lookups.append(path.name)
+        return _ambiguous_candidates()
+
+    def counting_choose(path, candidates, **kwargs):
+        prompts.append(path.name)
+        return candidates[0]
+
+    monkeypatch.setattr("y1sync.cli.identify", counting_identify)
+    monkeypatch.setattr("y1sync.cli.choose_candidate", counting_choose)
+
+    assert main(["scan", str(tmp_path)]) == 0
+    assert len(lookups) == 1 and len(prompts) == 1
+
+    # The second run must reuse both the lookup and the answer.
+    assert main(["scan", str(tmp_path)]) == 0
+    assert len(lookups) == 1, "re-queried the network for a cached track"
+    assert len(prompts) == 1, "re-asked a question already answered"
+
+
+def test_doctor_reports_the_cache_location(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("y1sync.cli.CACHE_ROOT", tmp_path / "somecache")
+    assert main(["doctor"]) == 0
+    # A remembered choice is sticky, so the user has to be told where to
+    # clear it.
+    assert "somecache" in capsys.readouterr().out
