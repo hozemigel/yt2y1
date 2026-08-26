@@ -13,6 +13,8 @@ def cand(album, conf=0.95, primary="Album", secondary=(),
 
 def test_prefers_album_over_compilation():
     # The real Fleetwood Mac case: Rumours, not Greatest Hits.
+    # Note: both candidates default to primary="Album" here, so this actually
+    # exercises level 2 (deprioritised secondary types), not level 1.
     ranked = rank_candidates([
         cand("Greatest Hits", secondary=("Compilation",), date="1988-01-01"),
         cand("Rumours", date="1977-02-04"),
@@ -22,11 +24,23 @@ def test_prefers_album_over_compilation():
 
 def test_prefers_original_over_later_compilation():
     # The real Cranberries case: No Need To Argue, not Stars.
+    # Note: both candidates default to primary="Album" here, so this actually
+    # exercises level 2 (deprioritised secondary types), not level 1.
     ranked = rank_candidates([
         cand("Stars: The Best of", secondary=("Compilation",), date="2002-09-02"),
         cand("No Need To Argue", date="1994-10-03"),
     ])
     assert ranked[0].meta.album == "No Need To Argue"
+
+
+def test_prefers_album_primary_type_over_compilation_primary_type():
+    # Isolates level 1: release-group primary type "Album" vs "Compilation",
+    # with no secondary types involved, otherwise equal.
+    ranked = rank_candidates([
+        cand("Various Artists Set", primary="Compilation"),
+        cand("The Album", primary="Album"),
+    ])
+    assert ranked[0].meta.album == "The Album"
 
 
 def test_prefers_earliest_release_among_equals():
