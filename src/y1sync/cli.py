@@ -81,44 +81,55 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
     cache = ContentCache(CACHE_ROOT / "identify")
     auto_accepted: list[str] = []
     taken: set[str] = set()
+    failures = 0
 
     for path in files:
-        candidates = cache.get(path)
-        if candidates is None:
-            candidates = identify(path, config.acoustid_key)
-            cache.put(path, candidates)
+        try:
+            candidates = cache.get(path)
+            if candidates is None:
+                candidates = identify(path, config.acoustid_key)
+                if not dry_run:
+                    cache.put(path, candidates)
 
-        pick, needs_review = decide(candidates)
-        if needs_review and not yes:
-            pick = choose_candidate(path, candidates)
-        elif needs_review and pick is not None:
-            auto_accepted.append(f"{path.name} -> {pick.meta.album}")
+            pick, needs_review = decide(candidates)
+            if needs_review and not yes:
+                pick = choose_candidate(path, candidates)
+            elif needs_review and pick is not None:
+                auto_accepted.append(f"{path.name} -> {pick.meta.album}")
 
-        if pick is None:
-            print(f"  skipped  {path.name}")
-            continue
+            if pick is None:
+                print(f"  skipped  {path.name}")
+                continue
 
-        new_name = resolve_collision(safe_filename(pick.meta), taken)
-        taken.add(new_name)
+            new_name = resolve_collision(safe_filename(pick.meta), taken)
+            taken.add(new_name)
 
-        if verbose:
-            print(f"  {path.name}\n      -> {new_name}  (confidence {pick.confidence:.2f})")
+            if verbose:
+                print(f"  {path.name}\n      -> {new_name}  (confidence {pick.confidence:.2f})")
 
-        if dry_run:
-            print(f"  would tag and rename  {path.name} -> {new_name}")
-            continue
+            if dry_run:
+                print(f"  would tag and rename  {path.name} -> {new_name}")
+                continue
 
-        # AcoustID candidates carry no artwork URL; look one up.
-        art_url = pick.artwork_url or artwork_url_for(pick.meta)
-        artwork = fetch_artwork(art_url, CACHE_ROOT / "artwork")
-        write_tags(path, pick.meta, artwork)
-        rename_file(path, new_name)
-        print(f"  tagged   {new_name}")
+            # AcoustID candidates carry no artwork URL; look one up.
+            art_url = pick.artwork_url or artwork_url_for(pick.meta)
+            artwork = fetch_artwork(art_url, CACHE_ROOT / "artwork")
+            write_tags(path, pick.meta, artwork)
+            rename_file(path, new_name)
+            print(f"  tagged   {new_name}")
+        except Exception as exc:
+            failures += 1
+            print(f"  FAILED   {path.name}: {exc}")
 
     if auto_accepted:
         print("\nAuto-accepted ambiguous tracks (--yes):")
         for line in auto_accepted:
             print(f"  {line}")
+
+    if failures:
+        print(f"\n{failures} file(s) failed.")
+        if failures == len(files):
+            return 1
     return 0
 
 
@@ -145,12 +156,21 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
     backup = backup_device(device, BACKUP_ROOT)
     print(f"Backup: {backup}")
 
+    failures = 0
     for path in files:
-        safe_copy(path, device / "Music" / path.name)
-        if verbose:
-            print(f"  copied   {path.name}")
+        try:
+            safe_copy(path, device / "Music" / path.name)
+            if verbose:
+                print(f"  copied   {path.name}")
+        except Exception as exc:
+            failures += 1
+            print(f"  FAILED   {path.name}: {exc}")
 
-    print(f"Copied {len(files)} file(s). Safe to disconnect.")
+    print(f"Copied {len(files) - failures} file(s). Safe to disconnect.")
+    if failures:
+        print(f"{failures} file(s) failed.")
+        if failures == len(files):
+            return 1
     return 0
 
 
