@@ -70,9 +70,11 @@ Each module has one responsibility and is testable without a real device.
 
 | Module | Responsibility |
 |---|---|
+| `models.py` | The `TrackMeta` and `Candidate` records shared across modules |
 | `cli.py` | Subcommands, argument parsing, output formatting |
 | `identify.py` | Answer "which recording is this?" — returns ranked candidates with confidence scores. Never decides. |
-| `metadata.py` | Normalize a chosen candidate into a `TrackMeta` record |
+| `ranking.py` | Rank releases and apply the auto-versus-ask decision rules |
+| `cache.py` | Cache identification results by audio content hash |
 | `artwork.py` | Fetch and cache cover art |
 | `tagging.py` | Write ID3v2.3 via mutagen |
 | `naming.py` | Derive a FAT32-safe, cross-platform-safe filename |
@@ -81,8 +83,12 @@ Each module has one responsibility and is testable without a real device.
 | `config.py` | Read `~/.config/y1sync/config.toml` — AcoustID API key, preferred artwork size, default music folder |
 
 The critical boundary is that `identify.py` returns candidates and
-confidence but never picks a winner. All decision logic lives in one place
-and is testable with no network access.
+confidence but never picks a winner. All decision logic lives in
+`ranking.py` and is testable with no network access.
+
+There is deliberately no separate `metadata.py`. Each identification
+source builds a `TrackMeta` as it parses its own response, so a normalizing
+layer between them would only forward data unchanged.
 
 ## Identification
 
