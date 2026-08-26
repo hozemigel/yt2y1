@@ -29,14 +29,14 @@ def artwork_url_for(meta: TrackMeta, session=None) -> str | None:
             params={"term": term, "entity": "album", "limit": 1},
             timeout=TIMEOUT,
         )
+        if not response.ok:
+            return None
+        results = response.json().get("results") or []
+        if not results or not isinstance(results[0], dict):
+            return None
+        url = results[0].get("artworkUrl100") or ""
     except Exception:
         return None
-    if not response.ok:
-        return None
-    results = response.json().get("results") or []
-    if not results:
-        return None
-    url = results[0].get("artworkUrl100") or ""
     return url.replace("100x100bb", "600x600bb") or None
 
 

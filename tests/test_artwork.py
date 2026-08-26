@@ -93,3 +93,29 @@ def test_artwork_lookup_returns_none_on_http_failure():
     session = FakeJsonSession({"results": []}, ok=False)
     meta = TrackMeta(artist="A", title="B", album="C")
     assert artwork_url_for(meta, session) is None
+
+
+class FakeBadJsonSession:
+    """A session whose response has a 200 status but an unparsable body."""
+
+    def get(self, url, params=None, timeout=None):
+        class Response:
+            ok = True
+
+            @staticmethod
+            def json():
+                raise ValueError("not valid json")
+
+        return Response()
+
+
+def test_artwork_lookup_returns_none_when_response_body_is_not_json():
+    session = FakeBadJsonSession()
+    meta = TrackMeta(artist="A", title="B", album="C")
+    assert artwork_url_for(meta, session) is None
+
+
+def test_artwork_lookup_returns_none_when_result_entry_is_not_a_dict():
+    session = FakeJsonSession({"results": ["not-a-dict"]})
+    meta = TrackMeta(artist="A", title="B", album="C")
+    assert artwork_url_for(meta, session) is None
