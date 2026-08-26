@@ -23,6 +23,14 @@ FAT_FILESYSTEMS = {"vfat", "msdos", "fat", "fat32", "exfat"}
 
 BACKUP_FOLDERS = ("Music", "Themes")
 
+# How many timestamped backups to keep per device. A sync is run often
+# (the expected usage is repeated runs on a growing folder), and each
+# backup can be gigabytes, so backing up on every run without pruning
+# quietly fills the home partition. Three keeps enough history to recover
+# from a bad sync a couple of runs back while bounding worst-case backup
+# storage to roughly three times one device's Music+Themes size.
+BACKUP_RETENTION = 3
+
 
 def looks_like_y1(path: Path) -> bool:
     """True when every folder in the Y1 signature is present.
@@ -62,15 +70,32 @@ def find_devices(partitions=None) -> list[Path]:
     return found
 
 
-def backup_device(device: Path, dest_root: Path) -> Path:
+def _prune_old_backups(backups_dir: Path, keep: int) -> None:
+    """Delete all but the `keep` most recent timestamped backups.
+
+    Backup folders are named with a sortable "%Y-%m-%d_%H%M%S" stamp, so
+    lexical order is chronological order.
+    """
+    if keep < 0:
+        return
+    stamps = sorted((p for p in backups_dir.iterdir() if p.is_dir()), key=lambda p: p.name)
+    for stale in stamps[:-keep] if keep else stamps:
+        shutil.rmtree(stale, ignore_errors=True)
+
+
+def backup_device(device: Path, dest_root: Path, keep: int = BACKUP_RETENTION) -> Path:
     """Copy the device's music and themes to a timestamped local folder.
 
     Backups go to local storage, never to the device: the device may be
-    full, failing, or the very thing being repaired.
+    full, failing, or the very thing being repaired. Only the `keep` most
+    recent backups for this device are retained; older ones are pruned
+    after the new backup completes so storage does not grow without bound
+    across repeated syncs.
     """
     device = Path(device).resolve()
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    destination = Path(dest_root) / device.name / stamp
+    backups_dir = Path(dest_root) / device.name
+    destination = backups_dir / stamp
 
     # Resolve before comparing so a relative path, a ".." segment or a
     # symlink cannot slip a destination inside the device tree past this
@@ -84,11 +109,17 @@ def backup_device(device: Path, dest_root: Path) -> Path:
             f"the device it is backing up"
         )
 
+    # A full-device backup can take minutes; print before starting so a
+    # long silent copy does not read as a hang.
+    print(f"Backing up {device.name} to {destination} ...")
+
     destination.mkdir(parents=True, exist_ok=True)
     for folder in BACKUP_FOLDERS:
         source = device / folder
         if source.is_dir():
             shutil.copytree(source, destination / folder, dirs_exist_ok=True)
+
+    _prune_old_backups(backups_dir, keep)
     return destination
 
 

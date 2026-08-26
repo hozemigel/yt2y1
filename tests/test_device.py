@@ -4,7 +4,8 @@ import os
 import pytest
 from pathlib import Path
 from y1sync.device import (
-    Y1_SIGNATURE, looks_like_y1, find_devices, backup_device, safe_copy,
+    BACKUP_RETENTION, Y1_SIGNATURE, looks_like_y1, find_devices,
+    backup_device, safe_copy,
 )
 
 
@@ -93,6 +94,48 @@ def test_backup_refuses_a_destination_inside_the_device(fake_y1):
     with pytest.raises(ValueError):
         backup_device(fake_y1, fake_y1 / "backup_on_device")
     assert sorted(p.name for p in fake_y1.iterdir()) == before
+
+
+def test_backup_prunes_older_backups(fake_y1, tmp_path):
+    # Each backup can be gigabytes and a sync runs often, so unbounded
+    # retention quietly fills the user's home partition.
+    root = tmp_path / "backups"
+    stale = root / fake_y1.name
+    stale.mkdir(parents=True)
+    for stamp in ("2020-01-01_000000", "2021-01-01_000000", "2022-01-01_000000"):
+        (stale / stamp).mkdir()
+
+    backup_device(fake_y1, root, keep=2)
+
+    kept = sorted(p.name for p in stale.iterdir())
+    assert len(kept) == 2
+    # Lexical order is chronological order for this stamp format, so the
+    # survivors must be the newest, never the oldest.
+    assert "2020-01-01_000000" not in kept
+    assert "2021-01-01_000000" not in kept
+
+
+def test_backup_keeps_the_most_recent_backups(fake_y1, tmp_path):
+    root = tmp_path / "backups"
+    destinations = []
+    for stamp in ("2020-01-01_000000", "2021-01-01_000000"):
+        older = root / fake_y1.name / stamp
+        older.mkdir(parents=True)
+        destinations.append(older)
+
+    fresh = backup_device(fake_y1, root, keep=2)
+
+    assert fresh.is_dir()
+    assert (fresh / "Music" / "song.mp3").read_bytes() == b"audio"
+    # The newest pre-existing backup survives alongside the one just made.
+    assert destinations[1].is_dir()
+
+
+def test_backup_retention_default_is_bounded():
+    # A default of zero or None would restore the unbounded behaviour
+    # this pruning exists to prevent.
+    assert isinstance(BACKUP_RETENTION, int)
+    assert BACKUP_RETENTION >= 1
 
 
 def test_safe_copy_writes_the_file(tmp_path):
