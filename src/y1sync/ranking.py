@@ -23,9 +23,15 @@ def _sort_key(candidate: Candidate) -> tuple:
     is_derivative = bool(set(candidate.secondary_types) & DEPRIORITISED_TYPES)
     is_official = candidate.release_status == "Official"
     # False sorts before True, so negate the qualities we want first.
+    #
+    # Being derivative outranks not being an Album, and the order matters:
+    # a compilation is still an "Album", so testing is_album first let a
+    # German hits compilation beat the original single a track was
+    # actually released on. Nothing derivative belongs at the top,
+    # whatever its primary type says.
     return (
-        not is_album,
         is_derivative,
+        not is_album,
         not is_official,
         candidate.release_date or _NO_DATE,
     )

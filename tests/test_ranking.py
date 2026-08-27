@@ -134,3 +134,25 @@ def test_dedupe_keeps_the_best_ranked_of_a_duplicate_set():
 def test_dedupe_ignores_case_differences():
     ranked = rank_candidates([cand("Wonderful Life"), cand("WONDERFUL LIFE")])
     assert len(ranked) == 1
+
+
+def test_an_original_single_beats_a_compilation_album():
+    # Found on a real track: "Be Mine" was released as a single, and
+    # ranking put the compilation "Bravo Hits 130" first because a
+    # compilation is still typed as an Album. Nothing derivative belongs
+    # at the top, whatever its primary type claims.
+    ranked = rank_candidates([
+        cand("Bravo Hits 130", primary="Album",
+             secondary=("Compilation",), date="2025-07-25"),
+        cand("Be Mine", primary="Single", date="2025-05-16"),
+    ])
+    assert ranked[0].meta.album == "Be Mine"
+
+
+def test_an_album_still_beats_a_single_when_neither_is_derivative():
+    # The Album preference is not discarded, only subordinated.
+    ranked = rank_candidates([
+        cand("Some Single", primary="Single", date="1990-01-01"),
+        cand("Some Album", primary="Album", date="1990-01-01"),
+    ])
+    assert ranked[0].meta.album == "Some Album"
