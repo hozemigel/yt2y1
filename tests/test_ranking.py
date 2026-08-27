@@ -101,3 +101,36 @@ def test_no_candidates_needs_review_with_no_pick():
     pick, needs_review = decide([])
     assert pick is None
     assert needs_review is True
+
+
+def test_collapses_the_same_album_in_many_pressings():
+    # MusicBrainz models each pressing as its own release, so a single
+    # album can arrive a dozen times. Found against the live service: one
+    # track offered 31 candidates, most of them indistinguishable.
+    pressings = [cand("Wonderful Life", date="1987-01-01") for _ in range(10)]
+    ranked = rank_candidates(pressings)
+    assert len(ranked) == 1
+
+
+def test_keeps_genuinely_different_albums():
+    ranked = rank_candidates([
+        cand("Rumours", date="1977-02-04"),
+        cand("Greatest Hits", secondary=("Compilation",), date="1988-01-01"),
+    ])
+    assert len(ranked) == 2
+
+
+def test_dedupe_keeps_the_best_ranked_of_a_duplicate_set():
+    # The compilation and the album share a title here, so only the
+    # better-ranked one may survive.
+    ranked = rank_candidates([
+        cand("Hot Shot", secondary=("Compilation",), date="2000-08-08"),
+        cand("Hot Shot", date="2000-08-08"),
+    ])
+    assert len(ranked) == 1
+    assert ranked[0].secondary_types == ()
+
+
+def test_dedupe_ignores_case_differences():
+    ranked = rank_candidates([cand("Wonderful Life"), cand("WONDERFUL LIFE")])
+    assert len(ranked) == 1

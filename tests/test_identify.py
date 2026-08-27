@@ -1,7 +1,8 @@
 from pathlib import Path
 import pytest
 from y1sync.identify import (
-    ACOUSTID_ENDPOINT, ITUNES_ENDPOINT, AcoustIDKeyRejected, guess_query_from_filename, identify,
+    ACOUSTID_ENDPOINT, ITUNES_ENDPOINT, MUSICBRAINZ_ENDPOINT,
+    AcoustIDKeyRejected, guess_query_from_filename, identify,
     parse_itunes_response, parse_acoustid_response,
 )
 
@@ -135,7 +136,7 @@ class RoutingSession:
         self.payloads = payloads
         self.calls = []
 
-    def get(self, url, params=None, timeout=None):
+    def get(self, url, params=None, timeout=None, headers=None):
         self.calls.append(url)
         payload = self.payloads.get(url, {})
         session = self
@@ -150,14 +151,24 @@ class RoutingSession:
         return Response()
 
 
+# The real shape, confirmed against the live service: AcoustID names the
+# recording and returns NO release data at all. An earlier fixture here
+# invented a "releasegroups" key, which is why this suite passed while the
+# tool silently fell through to filename guessing against the real API.
 SHAGGY_ACOUSTID = {"results": [{"score": 0.97, "recordings": [{
-    "title": "Angel (feat. Rayvon)",
+    "id": "rec-shaggy-angel",
+    "title": "Angel",
     "artists": [{"name": "Shaggy"}],
-    "releasegroups": [{"title": "Hot Shot", "type": "Album",
-                       "secondarytypes": [], "releases": [
-                           {"date": {"year": 2000, "month": 8, "day": 8},
-                            "status": "Official"}]}],
+    "duration": 235.0,
 }]}]}
+
+# MusicBrainz supplies the releases, with the types ranking is built on.
+SHAGGY_MUSICBRAINZ = {"releases": [{
+    "title": "Hot Shot",
+    "date": "2000-08-08",
+    "status": "Official",
+    "release-group": {"primary-type": "Album", "secondary-types": []},
+}]}
 
 SHAGGY_ITUNES = {"results": [{
     "artistName": "Shaggy",
@@ -174,17 +185,55 @@ def test_fingerprint_route_beats_the_filename_guess(monkeypatch):
     # The real failure: a filename lookup returned the 2020 re-recording
     # with Sting; the file was the 2000 original with Rayvon.
     monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (216, "AQADtEmkRSk"))
-    session = RoutingSession({ACOUSTID_ENDPOINT: SHAGGY_ACOUSTID,
-                              ITUNES_ENDPOINT: SHAGGY_ITUNES})
+    session = RoutingSession({
+        ACOUSTID_ENDPOINT: SHAGGY_ACOUSTID,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-shaggy-angel": SHAGGY_MUSICBRAINZ,
+        ITUNES_ENDPOINT: SHAGGY_ITUNES,
+    })
 
     found = identify(Path("Shaggy - Angel (Lyrics) Ft. Rayvon.mp3"),
                      api_key="key", session=session)
 
     assert [c.source for c in found] == ["acoustid"]
+    assert found[0].meta.artist == "Shaggy"
     assert found[0].meta.album == "Hot Shot"
     assert found[0].meta.year == "2000"
+    # The release types ranking needs must survive the MusicBrainz hop.
+    assert found[0].release_group_type == "Album"
+    assert found[0].release_status == "Official"
     # iTunes must never have been consulted once the fingerprint matched.
     assert ITUNES_ENDPOINT not in session.calls
+
+
+def test_musicbrainz_is_consulted_for_release_data(monkeypatch):
+    # AcoustID returns no releases, so skipping this hop would leave every
+    # candidate without the type and date the ranking rules sort on --
+    # making an original album indistinguishable from a compilation.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (216, "AQADtEmkRSk"))
+    session = RoutingSession({
+        ACOUSTID_ENDPOINT: SHAGGY_ACOUSTID,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-shaggy-angel": SHAGGY_MUSICBRAINZ,
+        ITUNES_ENDPOINT: SHAGGY_ITUNES,
+    })
+
+    identify(Path("x.mp3"), api_key="key", session=session)
+
+    assert f"{MUSICBRAINZ_ENDPOINT}/rec-shaggy-angel" in session.calls
+
+
+def test_falls_back_when_musicbrainz_knows_no_releases(monkeypatch):
+    # A recording with no releases yields no candidates, so the filename
+    # route is still better than returning nothing.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (216, "AQADtEmkRSk"))
+    session = RoutingSession({
+        ACOUSTID_ENDPOINT: SHAGGY_ACOUSTID,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-shaggy-angel": {"releases": []},
+        ITUNES_ENDPOINT: SHAGGY_ITUNES,
+    })
+
+    found = identify(Path("Shaggy - Angel.mp3"), api_key="key", session=session)
+
+    assert [c.source for c in found] == ["itunes"]
 
 
 def test_without_an_api_key_it_falls_back_to_the_filename(monkeypatch):

@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+import time
 from pathlib import Path
 
 import requests
@@ -10,6 +11,17 @@ from .models import Candidate, TrackMeta
 
 ITUNES_ENDPOINT = "https://itunes.apple.com/search"
 ACOUSTID_ENDPOINT = "https://api.acoustid.org/v2/lookup"
+MUSICBRAINZ_ENDPOINT = "https://musicbrainz.org/ws/2/recording"
+
+# MusicBrainz asks unauthenticated clients for one request per second and
+# a User-Agent that identifies the application.
+MUSICBRAINZ_USER_AGENT = "y1sync/0.1 (https://github.com/lukamilicevic/y1sync)"
+MUSICBRAINZ_RATE_LIMIT = 1.1
+
+# How many distinct recordings from one AcoustID hit to expand. Each costs
+# a rate-limited MusicBrainz request, and past the first few the matches
+# are usually the same recording on yet another release.
+MAX_RECORDINGS_EXPANDED = 3
 TIMEOUT = 15
 
 # Debris that YouTube rips leave in filenames.
@@ -134,6 +146,60 @@ def _raise_if_key_rejected(payload: dict) -> None:
         )
 
 
+def musicbrainz_releases(recording_id: str, session=None) -> list[dict]:
+    """Look up one recording's releases, with the types ranking needs.
+
+    AcoustID identifies *which recording* a file holds but returns no
+    release information, so this second hop is what lets the tool tell an
+    original album from a compilation.
+    """
+    http = session or requests
+    try:
+        response = http.get(
+            f"{MUSICBRAINZ_ENDPOINT}/{recording_id}",
+            params={"inc": "releases+release-groups+artists", "fmt": "json"},
+            headers={"User-Agent": MUSICBRAINZ_USER_AGENT},
+            timeout=TIMEOUT,
+        )
+    except Exception:
+        return []
+    if not getattr(response, "ok", False):
+        return []
+    try:
+        return response.json().get("releases") or []
+    except ValueError:
+        return []
+
+
+def candidates_from_musicbrainz(
+    recording: dict, releases: list[dict], score: float
+) -> list[Candidate]:
+    """Build one candidate per release of a recording."""
+    artists = recording.get("artists") or [{}]
+    artist = artists[0].get("name", "")
+    title = recording.get("title", "")
+
+    candidates = []
+    for release in releases:
+        group = release.get("release-group") or {}
+        date = release.get("date") or group.get("first-release-date") or ""
+        candidates.append(Candidate(
+            meta=TrackMeta(
+                artist=artist,
+                title=title,
+                album=release.get("title", ""),
+                year=date[:4] or None,
+            ),
+            confidence=score,
+            source="acoustid",
+            release_group_type=group.get("primary-type"),
+            secondary_types=tuple(group.get("secondary-types") or ()),
+            release_status=release.get("status"),
+            release_date=date or None,
+        ))
+    return candidates
+
+
 def fingerprint(path: Path) -> tuple[int, str] | None:
     """Return (duration, fingerprint) from chromaprint's fpcalc, or None."""
     try:
@@ -148,6 +214,38 @@ def fingerprint(path: Path) -> tuple[int, str] | None:
     return int(data["duration"]), data["fingerprint"]
 
 
+def _expand_acoustid(payload: dict, http) -> list[Candidate]:
+    """Turn an AcoustID hit into candidates, via MusicBrainz for releases.
+
+    AcoustID names the recording; MusicBrainz says which releases carry
+    it and of what type. Without the second hop every candidate would
+    lack the release data the ranking rules are built on, and an original
+    album would be indistinguishable from a compilation.
+    """
+    results = payload.get("results") or []
+    if not results:
+        return []
+
+    # Results arrive best-first; the top one is the match for this audio.
+    best = results[0]
+    score = best.get("score", 0.0)
+
+    candidates: list[Candidate] = []
+    seen: set[str] = set()
+    for recording in (best.get("recordings") or [])[:MAX_RECORDINGS_EXPANDED]:
+        recording_id = recording.get("id")
+        if not recording_id or recording_id in seen:
+            continue
+        if seen:
+            # MusicBrainz asks for one request per second.
+            time.sleep(MUSICBRAINZ_RATE_LIMIT)
+        seen.add(recording_id)
+        releases = musicbrainz_releases(recording_id, http)
+        candidates.extend(candidates_from_musicbrainz(recording, releases, score))
+
+    return candidates
+
+
 def identify(path: Path, api_key: str | None = None, session=None) -> list[Candidate]:
     """Identify a track, preferring the fingerprint route.
 
@@ -159,19 +257,20 @@ def identify(path: Path, api_key: str | None = None, session=None) -> list[Candi
         printed = fingerprint(path)
         if printed:
             duration, fp = printed
-            response = http.get(ACOUSTID_ENDPOINT, params={
-                "client": api_key, "duration": duration, "fingerprint": fp,
-                "meta": "recordings+releasegroups+compress", "format": "json",
-            }, timeout=TIMEOUT)
+            # meta goes as repeated parameters: requests percent-encodes a
+            # "+" inside a value, and AcoustID then reads the whole string
+            # as one unknown meta name and silently returns no recordings.
+            response = http.get(ACOUSTID_ENDPOINT, params=[
+                ("client", api_key), ("duration", duration), ("fingerprint", fp),
+                ("format", "json"), ("meta", "recordings"), ("meta", "compress"),
+            ], timeout=TIMEOUT)
             if response.ok:
                 payload = response.json()
                 if payload.get("status") == "error":
                     _raise_if_key_rejected(payload)
-                results = payload.get("results") or []
-                if results:
-                    parsed = parse_acoustid_response(payload)
-                    if parsed:
-                        return parsed
+                parsed = _expand_acoustid(payload, http)
+                if parsed:
+                    return parsed
             else:
                 # A 4xx carries AcoustID's own error body; read it before
                 # deciding this was merely a transient failure.
