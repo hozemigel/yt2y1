@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .artwork import artwork_url_for, fetch_artwork
 from .cache import ContentCache
-from .config import load_config
+from .config import Config, load_config, save_config
 from .device import backup_device, find_devices, safe_copy
 from .identify import AcoustIDKeyRejected, identify
 from .naming import rename_file, resolve_collision, safe_filename
@@ -17,6 +17,63 @@ from .tagging import write_tags
 
 CACHE_ROOT = Path.home() / ".cache" / "y1sync"
 BACKUP_ROOT = Path.home() / ".local" / "share" / "y1sync" / "backups"
+
+# Folders commonly used for downloaded or ripped music, checked first so
+# an obvious folder always leads the discovered list even if a deeper,
+# less relevant one would otherwise be found first.
+_COMMON_MUSIC_FOLDER_NAMES = ("Music", "Downloads", "Desktop")
+
+# Directories a music-folder search should not descend into: either
+# irrelevant (hidden config folders) or large enough to turn a first-run
+# prompt that should feel instant into a multi-second hang.
+_SKIP_DIR_NAMES = {"node_modules", "__pycache__", "venv", ".venv", "Trash", "$RECYCLE.BIN"}
+_MAX_SEARCH_DEPTH = 4
+_MAX_DIRS_VISITED = 20000
+
+
+def discover_music_folders(root: Path, limit: int = 6) -> list[Path]:
+    """Find folders under root that directly contain MP3 files.
+
+    Runs before the user has done anything else, so it is bounded in both
+    depth and total directories visited: on a home directory with years
+    of accumulated files, an unbounded walk would not feel instant.
+    """
+    found: list[Path] = []
+    visited = 0
+
+    def scan(directory: Path, depth: int) -> None:
+        nonlocal visited
+        if len(found) >= limit or visited >= _MAX_DIRS_VISITED:
+            return
+        visited += 1
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            return
+        if any(e.is_file() and e.suffix.lower() == ".mp3" for e in entries):
+            found.append(directory)
+        if depth >= _MAX_SEARCH_DEPTH:
+            return
+        for entry in entries:
+            if len(found) >= limit or visited >= _MAX_DIRS_VISITED:
+                return
+            if (entry.is_dir() and not entry.name.startswith(".")
+                    and entry.name not in _SKIP_DIR_NAMES):
+                scan(entry, depth + 1)
+
+    for name in _COMMON_MUSIC_FOLDER_NAMES:
+        candidate = root / name
+        if candidate.is_dir():
+            scan(candidate, 0)
+    scan(root, 0)
+
+    seen: set[Path] = set()
+    unique = []
+    for folder in found:
+        if folder not in seen:
+            seen.add(folder)
+            unique.append(folder)
+    return unique[:limit]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_doctor() -> int:
     config = load_config()
     print("y1sync environment check\n")
+    ffmpeg_found = shutil.which("ffmpeg")
+    fpcalc_found = shutil.which("fpcalc")
     for tool, purpose in (("ffmpeg", "audio decoding"),
                           ("fpcalc", "audio fingerprinting (chromaprint)")):
         found = shutil.which(tool)
@@ -61,13 +120,22 @@ def cmd_doctor() -> int:
     print(f"\n  Cache    {CACHE_ROOT}")
     print("           Delete it to re-identify tracks and be asked again.")
 
-    if not config.acoustid_key or not shutil.which("fpcalc"):
+    if not config.acoustid_key or not fpcalc_found:
         print("\nWithout chromaprint and an AcoustID key, tracks are identified")
         print("from their filenames alone and every one needs manual review.")
         print("Install chromaprint and get a free key at https://acoustid.org/")
 
     devices = find_devices()
-    print(f"\n  Devices  {devices[0] if devices else 'no Innioasis Y1 found'}")
+    device = devices[0] if devices else None
+    print(f"\n  Devices  {device or 'no Innioasis Y1 found'}")
+
+    print()
+    if ffmpeg_found and fpcalc_found and config.acoustid_key:
+        print("Ready — run `y1sync scan <folder>` next.")
+    else:
+        print("Not fully set up — see above. Once fixed, run `y1sync scan <folder>`.")
+    if device:
+        print(f"Y1 detected at {device} — `y1sync sync <folder>` will copy there once scanned.")
     return 0
 
 
@@ -253,12 +321,95 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
             failures += 1
             print(f"  FAILED   {rel}: {exc}")
 
-    print(f"Copied {len(files) - failures} file(s). Safe to disconnect.")
+    copied = len(files) - failures
+    print(f"Copied {copied} file(s). Safe to disconnect.")
+    if copied:
+        # Found on a real Y1: a freshly copied track was missing from the
+        # Music app right after unplugging, present again a bit later
+        # with no restart. The device reindexes its library on its own
+        # schedule, not the moment new files land on the drive.
+        print("New tracks may take a minute or two to show up in the Y1's "
+              "Music app — that's the device reindexing, not a failed copy.")
+        # Found on a real Y1: opening a freshly added track for the first
+        # time briefly shows a "file not supported" error, then plays it
+        # correctly a couple of seconds later, cover art and all. Same
+        # cause as the note above -- the device is still catching up.
+        print("The first time you open a new track it may briefly say it's "
+              "not supported before playing fine a couple seconds later — "
+              "same reason, ignore it.")
     if failures:
         print(f"{failures} file(s) failed.")
         if failures == len(files):
             return 1
     return 0
+
+
+def _prompt_for_music_folder(input_fn=input, output_fn=print) -> str:
+    """Ask the user to pick a music folder, save it, and return it.
+
+    Offers folders actually found on disk as numbered choices, so a first
+    run never requires typing a path -- the thing that prompted this menu
+    in the first place, on a keyboard where "~" is its own small ordeal.
+    """
+    while True:
+        candidates = discover_music_folders(Path.home())
+        output_fn("Where are your music files?")
+        for index, folder in enumerate(candidates, start=1):
+            output_fn(f"  {index}. {folder}")
+        manual_option = len(candidates) + 1
+        output_fn(f"  {manual_option}. Enter a path manually")
+
+        reply = input_fn("Choose a number: ").strip()
+        if not reply.isdigit():
+            output_fn("Enter a number from the list.")
+            continue
+        choice = int(reply)
+        if 1 <= choice <= len(candidates):
+            folder = candidates[choice - 1]
+        elif choice == manual_option:
+            typed = input_fn("Path to your music folder: ").strip()
+            folder = Path(typed).expanduser()
+            if not folder.is_dir():
+                output_fn(f"Not a folder: {folder}")
+                continue
+        else:
+            output_fn("Enter a number from the list.")
+            continue
+
+        config = load_config()
+        save_config(Config(acoustid_key=config.acoustid_key, music_folder=str(folder)))
+        return str(folder)
+
+
+def cmd_menu(input_fn=input, output_fn=print) -> int:
+    """The no-arguments entry point: a numbered menu instead of flags and paths.
+
+    The scan/sync/doctor subcommands stay exactly as they are for anyone
+    who wants them; this only wraps them for daily use once a music
+    folder is on file.
+    """
+    config = load_config()
+    folder = config.music_folder or _prompt_for_music_folder(input_fn, output_fn)
+
+    while True:
+        output_fn("")
+        output_fn("1. Update player  (find new tracks, then send them over)")
+        output_fn("2. Change music folder")
+        output_fn("3. Check setup")
+        output_fn("4. Quit")
+        reply = input_fn("Choose a number: ").strip()
+
+        if reply == "1":
+            cmd_scan(folder, dry_run=False, yes=False, verbose=False)
+            cmd_sync(folder, dry_run=False, verbose=False)
+        elif reply == "2":
+            folder = _prompt_for_music_folder(input_fn, output_fn)
+        elif reply == "3":
+            cmd_doctor()
+        elif reply == "4":
+            return 0
+        else:
+            output_fn("Enter a number from the list.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -271,9 +422,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_scan(args.folder, args.dry_run, args.yes, args.verbose)
     if args.command == "sync":
         return cmd_sync(args.folder, args.dry_run, args.verbose)
-
-    parser.print_help()
-    return 2
+    return cmd_menu()
 
 
 if __name__ == "__main__":

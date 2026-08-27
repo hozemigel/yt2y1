@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pytest
-from y1sync.cli import build_parser, main
+from y1sync.cli import build_parser, cmd_menu, discover_music_folders, main
+from y1sync.config import Config, load_config, save_config
 from y1sync.models import Candidate, TrackMeta
 
 
@@ -41,8 +44,11 @@ def test_flags_default_to_false():
     assert args.verbose is False
 
 
-def test_no_arguments_exits_nonzero(capsys):
-    assert main([]) != 0
+def test_no_arguments_launches_the_menu(monkeypatch):
+    calls = []
+    monkeypatch.setattr("y1sync.cli.cmd_menu", lambda: calls.append(True) or 0)
+    assert main([]) == 0
+    assert calls == [True]
 
 
 def test_doctor_reports_status(capsys):
@@ -279,6 +285,25 @@ def test_sync_recurses_and_preserves_the_tree(tmp_path, capsys, monkeypatch):
     assert copied.read_bytes() == b"nested audio"
     assert (device / "Music" / "top.mp3").read_bytes() == b"top audio"
 
+    out = capsys.readouterr().out
+    assert "reindexing" in out
+    assert "not supported" in out
+
+
+def test_sync_with_no_files_skips_the_reindexing_note(tmp_path, capsys, monkeypatch):
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library"
+    source.mkdir()
+
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+
+    assert main(["sync", str(source)]) == 0
+
+    out = capsys.readouterr().out
+    assert "reindexing" not in out
+    assert "not supported" not in out
+
 
 def test_sync_dry_run_previews_the_whole_tree(tmp_path, capsys, monkeypatch):
     device = _fake_device(tmp_path)
@@ -374,3 +399,143 @@ def test_yes_still_accepts_a_fingerprinted_track(tmp_path, capsys, monkeypatch):
     assert "would tag and rename" in out
     # And it says which ambiguous choice it made on the user's behalf.
     assert "Hot Shot" in out
+
+
+# --- discover_music_folders ---------------------------------------------
+
+
+def test_discovers_a_folder_containing_mp3s(tmp_path):
+    music = tmp_path / "Music"
+    music.mkdir()
+    (music / "song.mp3").write_bytes(b"x")
+
+    found = discover_music_folders(tmp_path)
+
+    assert music in found
+
+
+def test_ignores_folders_with_no_mp3s(tmp_path):
+    (tmp_path / "Photos").mkdir()
+    (tmp_path / "Photos" / "pic.jpg").write_bytes(b"x")
+
+    assert discover_music_folders(tmp_path) == []
+
+
+def test_skips_hidden_directories(tmp_path):
+    hidden = tmp_path / ".cache"
+    hidden.mkdir()
+    (hidden / "song.mp3").write_bytes(b"x")
+
+    assert discover_music_folders(tmp_path) == []
+
+
+def test_common_folder_names_surface_first(tmp_path):
+    deep = tmp_path / "some" / "deeply" / "nested" / "folder"
+    deep.mkdir(parents=True)
+    (deep / "song.mp3").write_bytes(b"x")
+    music = tmp_path / "Music"
+    music.mkdir()
+    (music / "song.mp3").write_bytes(b"x")
+
+    found = discover_music_folders(tmp_path)
+
+    assert found[0] == music
+
+
+def test_respects_the_limit(tmp_path):
+    for n in range(10):
+        folder = tmp_path / f"Album{n}"
+        folder.mkdir()
+        (folder / "song.mp3").write_bytes(b"x")
+
+    assert len(discover_music_folders(tmp_path, limit=3)) == 3
+
+
+# --- interactive menu ----------------------------------------------------
+
+
+def _config_path(tmp_path):
+    return tmp_path / "config.toml"
+
+
+def test_first_run_prompts_for_a_folder_and_saves_it(tmp_path, monkeypatch):
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: _config_path(tmp_path))
+    music = tmp_path / "Music"
+    music.mkdir()
+    monkeypatch.setattr("y1sync.cli.discover_music_folders", lambda root, limit=6: [music])
+
+    replies = iter(["1", "4"])  # pick the discovered folder, then quit
+    lines = []
+    cmd_menu(input_fn=lambda _: next(replies), output_fn=lines.append)
+
+    assert load_config(_config_path(tmp_path)).music_folder == str(music)
+    assert any("Where are your music files?" in line for line in lines)
+
+
+def test_a_saved_folder_skips_the_first_run_prompt(tmp_path, monkeypatch):
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    lines = []
+    cmd_menu(input_fn=lambda _: "4", output_fn=lines.append)
+
+    assert not any("Where are your music files?" in line for line in lines)
+
+
+def test_menu_option_1_scans_then_syncs(tmp_path, monkeypatch):
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    calls = []
+    monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: calls.append(("scan", folder)))
+    monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: calls.append(("sync", folder)))
+
+    replies = iter(["1", "4"])
+    cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert calls == [("scan", str(tmp_path)), ("sync", str(tmp_path))]
+
+
+def test_menu_option_3_checks_setup(tmp_path, monkeypatch):
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    calls = []
+    monkeypatch.setattr("y1sync.cli.cmd_doctor", lambda: calls.append("doctor"))
+
+    replies = iter(["3", "4"])
+    cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert calls == ["doctor"]
+
+
+def test_menu_rejects_an_invalid_choice_and_reprompts(tmp_path, monkeypatch):
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    lines = []
+    replies = iter(["banana", "4"])
+    result = cmd_menu(input_fn=lambda _: next(replies), output_fn=lines.append)
+
+    assert result == 0
+    assert any("Enter a number" in line for line in lines)
+
+
+def test_menu_option_2_changes_the_saved_folder(tmp_path, monkeypatch):
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    new_folder = tmp_path / "Elsewhere"
+    new_folder.mkdir()
+    # No discovered folders offered, so option 1 is "enter a path manually".
+    monkeypatch.setattr("y1sync.cli.discover_music_folders", lambda root, limit=6: [])
+
+    inputs = iter(["2", "1", str(new_folder), "4"])
+    cmd_menu(input_fn=lambda _: next(inputs), output_fn=lambda *a: None)
+
+    assert load_config(path).music_folder == str(new_folder)
