@@ -123,6 +123,33 @@ def backup_device(device: Path, dest_root: Path, keep: int = BACKUP_RETENTION) -
     return destination
 
 
+# FAT32 stores mtimes with 2-second resolution, so comparing exactly
+# would treat every file a previous sync already copied as changed again.
+_MTIME_TOLERANCE = 2.0
+
+
+def needs_copy(src: Path, dst: Path) -> bool:
+    """True when dst is missing or plausibly holds different bytes than src.
+
+    A sync is run often on a library that mostly hasn't changed since the
+    last time, and re-copying gigabytes of already-identical audio over
+    USB on every run is the difference between a sync that takes seconds
+    and one that takes minutes. Size and mtime are a good enough proxy for
+    "already copied" without re-reading every file's contents -- the same
+    trade-off rsync and most sync tools make. safe_copy() is what leaves
+    dst's mtime matching src's after a real copy, which is what lets a
+    later run tell the two apart.
+    """
+    try:
+        dst_stat = dst.stat()
+    except OSError:
+        return True
+    src_stat = src.stat()
+    if dst_stat.st_size != src_stat.st_size:
+        return True
+    return abs(dst_stat.st_mtime - src_stat.st_mtime) > _MTIME_TOLERANCE
+
+
 def safe_copy(src: Path, dst: Path) -> None:
     """Copy src to dst so an interruption cannot corrupt dst.
 
@@ -149,6 +176,13 @@ def safe_copy(src: Path, dst: Path) -> None:
         raise
 
     os.replace(temp, dst)
+
+    # Mirrors src's mtime onto dst rather than leaving the copy's own
+    # timestamp, so a later sync can tell an already-copied file apart
+    # from a changed one by size and mtime alone -- see needs_copy()
+    # below -- without re-reading every file's contents on each run.
+    src_stat = src.stat()
+    os.utime(dst, (src_stat.st_atime, src_stat.st_mtime))
 
     # fsync above only guarantees the temp file's bytes; the rename that
     # makes them visible under dst's name is a separate write to the

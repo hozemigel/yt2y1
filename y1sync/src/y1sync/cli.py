@@ -8,7 +8,7 @@ from pathlib import Path
 from .artwork import artwork_url_for, fetch_artwork
 from .cache import ContentCache
 from .config import Config, load_config, save_config
-from .device import backup_device, find_devices, safe_copy
+from .device import backup_device, find_devices, needs_copy, safe_copy
 from .identify import AcoustIDKeyRejected, identify
 from .naming import rename_file, resolve_collision, safe_filename
 from .ranking import decide
@@ -310,20 +310,35 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
     files = _find_mp3s(source)
     print(f"Device: {device}")
 
+    # The tree found under the source folder is preserved on the device
+    # rather than flattened: two files both called "rip.mp3" in different
+    # album folders must not collide in Music/. Only files the device
+    # doesn't already have byte-for-byte are copied -- see needs_copy().
+    pending = [
+        path for path in files
+        if needs_copy(path, device / "Music" / path.relative_to(source))
+    ]
+    unchanged = len(files) - len(pending)
+
     if dry_run:
-        for path in files:
+        for path in pending:
             print(f"  would copy  {path.relative_to(source)}")
-        print(f"\n{len(files)} file(s) would be copied.")
+        print(f"\n{len(pending)} file(s) would be copied.")
+        if unchanged:
+            print(f"{unchanged} file(s) already on the device, unchanged.")
+        return 0
+
+    if not pending:
+        # Nothing would be written, so there's nothing to protect with a
+        # backup either -- see backup_device()'s docstring.
+        print(f"Already up to date -- {unchanged} file(s) unchanged. Safe to disconnect.")
         return 0
 
     backup = backup_device(device, BACKUP_ROOT)
     print(f"Backup: {backup}")
 
     failures = 0
-    for path in files:
-        # The tree found under the source folder is preserved on the
-        # device rather than flattened: two files both called "rip.mp3"
-        # in different album folders must not collide in Music/.
+    for path in pending:
         rel = path.relative_to(source)
         try:
             safe_copy(path, device / "Music" / rel)
@@ -333,8 +348,9 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
             failures += 1
             print(f"  FAILED   {rel}: {exc}")
 
-    copied = len(files) - failures
-    print(f"Copied {copied} file(s). Safe to disconnect.")
+    copied = len(pending) - failures
+    suffix = f", {unchanged} already up to date" if unchanged else ""
+    print(f"Copied {copied} file(s){suffix}. Safe to disconnect.")
     if copied:
         # Found on a real Y1: a freshly copied track was missing from the
         # Music app right after unplugging, present again a bit later
@@ -351,7 +367,7 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
               "same reason, ignore it.")
     if failures:
         print(f"{failures} file(s) failed.")
-        if failures == len(files):
+        if failures == len(pending):
             return 1
     return 0
 

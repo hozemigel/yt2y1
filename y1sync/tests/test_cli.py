@@ -364,6 +364,35 @@ def test_sync_recurses_and_preserves_the_tree(tmp_path, capsys, monkeypatch):
     assert "not supported" in out
 
 
+def test_sync_skips_a_file_already_on_the_device(tmp_path, capsys, monkeypatch):
+    # A sync is run often on a library that mostly hasn't changed --
+    # re-copying gigabytes of identical audio over USB on every run is
+    # the exact cost needs_copy() exists to avoid.
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library"
+    source.mkdir()
+    (source / "top.mp3").write_bytes(b"top audio")
+
+    backups = []
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+    monkeypatch.setattr(
+        "y1sync.cli.backup_device",
+        lambda dev, root: backups.append(1) or (root / "stub"),
+    )
+
+    assert main(["sync", str(source)]) == 0
+    assert len(backups) == 1, "first sync must back up before writing"
+
+    capsys.readouterr()
+    assert main(["sync", str(source)]) == 0
+    out = capsys.readouterr().out
+
+    assert len(backups) == 1, "second sync copied nothing, so must not back up again"
+    assert "up to date" in out.lower()
+    assert "reindexing" not in out
+
+
 def test_sync_with_no_files_skips_the_reindexing_note(tmp_path, capsys, monkeypatch):
     device = _fake_device(tmp_path)
     source = tmp_path / "library"

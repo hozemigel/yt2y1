@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 from y1sync.device import (
     BACKUP_RETENTION, Y1_SIGNATURE, looks_like_y1, find_devices,
-    backup_device, safe_copy,
+    backup_device, needs_copy, safe_copy,
 )
 
 
@@ -200,6 +200,64 @@ def test_safe_copy_fsyncs_the_directory_after_the_rename(tmp_path, monkeypatch):
     safe_copy(src, dst)
 
     assert len(synced_fds) == 2  # the temp file's data, then the directory
+
+
+def test_safe_copy_mirrors_the_source_mtime(tmp_path):
+    # needs_copy() relies on dst's mtime matching src's after a real copy
+    # to tell an already-synced file apart from a changed one -- without
+    # this, every file would look "changed" again on the very next run.
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    os.utime(src, (1_700_000_000, 1_700_000_000))
+    dst = tmp_path / "dst.mp3"
+
+    safe_copy(src, dst)
+
+    assert dst.stat().st_mtime == pytest.approx(1_700_000_000)
+
+
+def test_needs_copy_when_destination_is_missing(tmp_path):
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    assert needs_copy(src, tmp_path / "missing.mp3") is True
+
+
+def test_needs_copy_is_false_after_a_real_copy(tmp_path):
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "dst.mp3"
+    safe_copy(src, dst)
+    assert needs_copy(src, dst) is False
+
+
+def test_needs_copy_when_size_differs(tmp_path):
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "dst.mp3"
+    safe_copy(src, dst)
+    src.write_bytes(b"a longer payload than before")
+    os.utime(src, (dst.stat().st_atime, dst.stat().st_mtime))
+    assert needs_copy(src, dst) is True
+
+
+def test_needs_copy_when_mtime_differs_beyond_fat32_tolerance(tmp_path):
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "dst.mp3"
+    dst.write_bytes(b"payload")
+    now = src.stat().st_mtime
+    os.utime(dst, (now - 10, now - 10))
+    assert needs_copy(src, dst) is True
+
+
+def test_needs_copy_tolerates_fat32s_two_second_resolution(tmp_path):
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "dst.mp3"
+    dst.write_bytes(b"payload")
+    now = src.stat().st_mtime
+    os.utime(dst, (now - 1, now - 1))
+    assert needs_copy(src, dst) is False
 
 
 def test_safe_copy_survives_a_directory_that_cannot_be_fsynced(tmp_path, monkeypatch):

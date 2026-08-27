@@ -13,6 +13,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.12"]
+        package: [y1sync, yt2mp3]
+
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
 
     steps:
       - uses: actions/checkout@v4
@@ -21,17 +26,18 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # ffmpeg generates the silent MP3 the tagging tests need.
+      # y1sync's tagging tests use ffmpeg to generate the silent MP3 they
+      # tag; yt2mp3's tests mock ensure_ffmpeg and don't need it installed.
       - name: Install ffmpeg (Linux)
-        if: runner.os == 'Linux'
+        if: matrix.package == 'y1sync' && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Install ffmpeg (macOS)
-        if: runner.os == 'macOS'
+        if: matrix.package == 'y1sync' && runner.os == 'macOS'
         run: brew install ffmpeg
 
       - name: Install ffmpeg (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.package == 'y1sync' && runner.os == 'Windows'
         run: choco install ffmpeg -y
 
       - name: Install package

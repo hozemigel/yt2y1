@@ -15,7 +15,7 @@ MUSICBRAINZ_ENDPOINT = "https://musicbrainz.org/ws/2/recording"
 
 # MusicBrainz asks unauthenticated clients for one request per second and
 # a User-Agent that identifies the application.
-MUSICBRAINZ_USER_AGENT = "y1sync/0.1 (https://github.com/lukamilicevic/y1sync)"
+MUSICBRAINZ_USER_AGENT = "y1sync/0.1 (https://github.com/hozemigel/yt2y1)"
 MUSICBRAINZ_RATE_LIMIT = 1.1
 
 # How many distinct recordings from one AcoustID hit to expand. Each costs
