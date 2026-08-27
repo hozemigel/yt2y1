@@ -190,6 +190,12 @@ def test_safe_copy_cleans_up_the_temp_file_after_a_failed_copy(tmp_path, monkeyp
     assert sorted(p.name for p in tmp_path.iterdir()) == ["dst.mp3", "src.mp3"]
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="directory fsync is unsupported on Windows -- safe_copy() swallows "
+           "it there by design; see test_safe_copy_survives_a_directory_that_"
+           "cannot_be_fsynced",
+)
 def test_safe_copy_fsyncs_the_directory_after_the_rename(tmp_path, monkeypatch):
     # Found on a real Y1: unplugging right after "safe to disconnect" left
     # a 0-byte file at the right name. The rename's directory entry was
