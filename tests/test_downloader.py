@@ -12,7 +12,7 @@ def test_build_ydl_opts_defaults():
     pp = d["postprocessors"][0]
     assert pp["key"] == "FFmpegExtractAudio"
     assert pp["preferredcodec"] == "mp3"
-    assert pp["preferredquality"] == "192"
+    assert pp["preferredquality"] == "320"
 
 
 def test_build_ydl_opts_custom_values():

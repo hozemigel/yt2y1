@@ -5,8 +5,8 @@ def test_build_parser_defaults():
     parser = cli.build_parser()
     args = parser.parse_args(["https://youtu.be/x"])
     assert args.url == "https://youtu.be/x"
-    assert args.output_dir == "."
-    assert args.quality == "192"
+    assert args.output_dir == cli.DEFAULT_OUTPUT_DIR
+    assert args.quality == "320"
     assert args.filename_template == "%(title)s.%(ext)s"
 
 

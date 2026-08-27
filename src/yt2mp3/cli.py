@@ -1,8 +1,11 @@
 import argparse
+import os
 import sys
 
 from yt2mp3.checks import ensure_ffmpeg, FfmpegNotFoundError
 from yt2mp3.downloader import DownloadOptions, download
+
+DEFAULT_OUTPUT_DIR = os.path.expanduser("~/yt2mp3/pesme")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -14,13 +17,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-o", "--output",
         dest="output_dir",
-        default=".",
-        help="Output directory (default: current directory)",
+        default=DEFAULT_OUTPUT_DIR,
+        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
     )
     parser.add_argument(
         "-q", "--quality",
-        default="192",
-        help="MP3 bitrate in kbps (default: 192)",
+        default="320",
+        help="MP3 bitrate in kbps (default: 320)",
     )
     parser.add_argument(
         "--filename-template",

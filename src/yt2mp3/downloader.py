@@ -8,7 +8,7 @@ import yt_dlp
 class DownloadOptions:
     url: str
     output_dir: str = "."
-    quality: str = "192"
+    quality: str = "320"
     filename_template: str = "%(title)s.%(ext)s"
 
 
