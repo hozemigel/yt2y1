@@ -79,6 +79,11 @@ def _existing_names(directory: Path) -> set[str]:
         return set()
 
 
+def _is_a_guess(candidate) -> bool:
+    """True when nothing but the filename supports this identification."""
+    return candidate is not None and candidate.source != "acoustid"
+
+
 def _find_mp3s(root: Path) -> list[Path]:
     """Every MP3 under root, at any depth, sorted for stable output.
 
@@ -103,6 +108,7 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
     config = load_config()
     cache = ContentCache(CACHE_ROOT / "identify")
     auto_accepted: list[str] = []
+    unconfirmed: list[str] = []
     # Names already in use, per directory. Seeded from what is on disk, not
     # from an empty set: the folder usually already holds files this tool
     # named on an earlier run, and a name it does not know about is a name
@@ -124,6 +130,15 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
 
             if pick is None:
                 pick, needs_review = decide(candidates)
+                if needs_review and yes and _is_a_guess(pick):
+                    # --yes exists to skip choosing between plausible
+                    # releases of a known recording. A filename guess is a
+                    # different thing: nothing has confirmed the audio is
+                    # even this track, and accepting it unseen reproduces
+                    # the misidentification this tool exists to prevent.
+                    unconfirmed.append(f"{path.name} -> {pick.meta.artist} - {pick.meta.title}")
+                    print(f"  needs review  {path.name} (identified from its filename)")
+                    continue
                 if needs_review and not yes:
                     pick = choose_candidate(path, candidates)
                 elif needs_review and pick is not None:
@@ -184,6 +199,14 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
         print("\nAuto-accepted ambiguous tracks (--yes):")
         for line in auto_accepted:
             print(f"  {line}")
+
+    if unconfirmed:
+        print(f"\n{len(unconfirmed)} track(s) left untagged: identified only from")
+        print("their filenames, which --yes will not accept unseen.")
+        for line in unconfirmed:
+            print(f"  {line}")
+        print("\nRun without --yes to review them, or set up fingerprinting")
+        print("(y1sync doctor) so they can be identified from the audio.")
 
     if failures:
         print(f"\n{failures} file(s) failed.")

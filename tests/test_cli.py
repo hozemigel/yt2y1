@@ -297,3 +297,80 @@ def test_sync_dry_run_previews_the_whole_tree(tmp_path, capsys, monkeypatch):
     # --dry-run writes nothing anywhere, including no backup.
     assert not (tmp_path / "backups").exists()
     assert not any((device / "Music").iterdir())
+
+
+# --- --yes must not accept filename guesses ----------------------------
+#
+# Found by running the tool on a real library before fingerprinting was
+# configured: --yes accepted all 14 tracks at confidence 0.0, including
+# Counting Crows in place of Harry Styles. --yes is meant to skip choosing
+# between plausible releases of a recording the audio has confirmed, not
+# to rubber-stamp a guess made from YouTube debris in a filename.
+
+
+def _guess_candidate(artist="Counting Crows", title="American Girls"):
+    """What the iTunes fallback produces: no audio ever confirmed it."""
+    return Candidate(
+        meta=TrackMeta(artist=artist, title=title, album="Hard Candy"),
+        confidence=0.0, source="itunes", release_group_type="Album",
+        release_status="Official", release_date="2002-01-01",
+    )
+
+
+def _two_guesses():
+    return [_guess_candidate(), _guess_candidate("Harry Styles", "American Girls")]
+
+
+def test_yes_refuses_to_accept_a_filename_guess(tmp_path, capsys, monkeypatch):
+    (tmp_path / "Harry Styles - American Girls.mp3").write_bytes(b"one")
+    monkeypatch.setattr("y1sync.cli.identify",
+                        lambda p, api_key=None, session=None: _two_guesses())
+    monkeypatch.setattr("y1sync.cli.CACHE_ROOT", tmp_path / "cache")
+
+    main(["scan", str(tmp_path), "--dry-run", "--yes"])
+    out = capsys.readouterr().out.lower()
+
+    assert "needs review" in out
+    # It must not have quietly written the wrong artist.
+    assert "would tag and rename" not in out
+
+
+def test_yes_explains_what_to_do_about_refused_tracks(tmp_path, capsys, monkeypatch):
+    (tmp_path / "song.mp3").write_bytes(b"one")
+    monkeypatch.setattr("y1sync.cli.identify",
+                        lambda p, api_key=None, session=None: _two_guesses())
+    monkeypatch.setattr("y1sync.cli.CACHE_ROOT", tmp_path / "cache")
+
+    main(["scan", str(tmp_path), "--dry-run", "--yes"])
+    out = capsys.readouterr().out.lower()
+
+    # A refusal the user cannot act on is just an obstruction.
+    assert "without --yes" in out
+    assert "doctor" in out
+
+
+def test_yes_still_accepts_a_fingerprinted_track(tmp_path, capsys, monkeypatch):
+    # The flag keeps working for what it is actually for: choosing among
+    # releases of a recording the audio confirmed.
+    (tmp_path / "song.mp3").write_bytes(b"one")
+
+    def two_releases(path, api_key=None, session=None):
+        return [
+            Candidate(meta=TrackMeta(artist="Shaggy", title="Angel", album="Hot Shot"),
+                      confidence=0.97, source="acoustid", release_group_type="Album",
+                      release_status="Official", release_date="2000-08-08"),
+            Candidate(meta=TrackMeta(artist="Shaggy", title="Angel", album="Boombastic"),
+                      confidence=0.97, source="acoustid", release_group_type="Album",
+                      secondary_types=("Compilation",),
+                      release_status="Official", release_date="2008-01-01"),
+        ]
+
+    monkeypatch.setattr("y1sync.cli.identify", two_releases)
+    monkeypatch.setattr("y1sync.cli.CACHE_ROOT", tmp_path / "cache")
+
+    main(["scan", str(tmp_path), "--dry-run", "--yes"])
+    out = capsys.readouterr().out
+
+    assert "would tag and rename" in out
+    # And it says which ambiguous choice it made on the user's behalf.
+    assert "Hot Shot" in out
