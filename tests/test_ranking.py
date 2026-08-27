@@ -156,3 +156,71 @@ def test_an_album_still_beats_a_single_when_neither_is_derivative():
         cand("Some Album", primary="Album", date="1990-01-01"),
     ])
     assert ranked[0].meta.album == "Some Album"
+
+
+def _recording(title, album, conf, **kwargs):
+    kwargs.setdefault("primary", "Album")
+    kwargs.setdefault("date", "2000-01-01")
+    candidate = cand(album, conf=conf, **kwargs)
+    return Candidate(
+        meta=TrackMeta(artist=candidate.meta.artist, title=title, album=album),
+        confidence=candidate.confidence, source=candidate.source,
+        release_group_type=candidate.release_group_type,
+        secondary_types=candidate.secondary_types,
+        release_status=candidate.release_status,
+        release_date=candidate.release_date,
+    )
+
+
+def test_a_different_recordings_releases_stay_together():
+    # Found on a real track: AcoustID named two different recordings at
+    # near-equal confidence (see identify's near-tied-results test). Pooling
+    # every release by quality alone scattered the correct recording's one
+    # compilation between the wrong recording's several official albums,
+    # with nothing marking that they were even different songs.
+    releases = [
+        _recording("Are You Still Having Fun?", "Living in the Present Future",
+                   conf=0.9767, date="2000-01-01"),
+        _recording("Are You Still Having Fun?", "Most Wanted Summer 2000",
+                   conf=0.9767, secondary=("Compilation",), date="2000-06-01"),
+        _recording("Save Tonight", "Promo Only: Modern Rock Radio, July 1998",
+                   conf=0.9747, secondary=("Compilation",), date="1998-07-01"),
+    ]
+    ranked = rank_candidates(releases)
+    titles = [c.meta.title for c in ranked]
+    assert titles == [
+        "Are You Still Having Fun?", "Are You Still Having Fun?", "Save Tonight",
+    ]
+
+
+def test_groups_are_ordered_by_the_recordings_own_confidence():
+    # The lower-confidence recording's compilation must not leapfrog into
+    # the higher-confidence recording's block just because compilations
+    # sort low within a block.
+    releases = [
+        _recording("Weaker Match", "Weaker's Only Release", conf=0.80,
+                    secondary=("Compilation",), date="1998-01-01"),
+        _recording("Stronger Match", "Stronger's Only Release", conf=0.95,
+                    secondary=("Compilation",), date="1998-01-01"),
+    ]
+    ranked = rank_candidates(releases)
+    assert ranked[0].meta.title == "Stronger Match"
+
+
+def test_dedupe_merges_curly_and_straight_apostrophes():
+    # Found on a real track: MusicBrainz catalogued "It Ain't Me" twice,
+    # differing only in apostrophe style, and both survived deduping as
+    # if they were different releases.
+    ranked = rank_candidates([
+        cand("It Ain’t Me", date="2017-02-17"),
+        cand("It Ain't Me", date="2017-02-17"),
+    ])
+    assert len(ranked) == 1
+
+
+def test_dedupe_merges_curly_and_straight_quotes_and_dashes():
+    ranked = rank_candidates([
+        cand("“Greatest” Hits – Vol. 1", date="2000-01-01"),
+        cand('"Greatest" Hits - Vol. 1', date="2000-01-01"),
+    ])
+    assert len(ranked) == 1

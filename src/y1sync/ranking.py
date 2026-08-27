@@ -17,6 +17,21 @@ DEPRIORITISED_TYPES = {"Compilation", "Live", "Remix", "DJ-mix"}
 # Sorts after any real date, so undated releases fall to the bottom.
 _NO_DATE = "9999-99-99"
 
+# Typographic variants MusicBrainz submissions are inconsistent about.
+# Found on a real track: the same single was catalogued twice as "It
+# Ain't Me" and "It Ain’t Me", differing only in apostrophe style, and
+# compared unequal -- dedup kept both as if they were different releases.
+_PUNCTUATION_VARIANTS = str.maketrans({
+    "‘": "'", "’": "'", "‚": "'", "′": "'",
+    "“": '"', "”": '"', "„": '"', "″": '"',
+    "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-",
+})
+
+
+def _normalize(text: str) -> str:
+    """Fold case and typographic punctuation so near-identical text compares equal."""
+    return text.casefold().translate(_PUNCTUATION_VARIANTS)
+
 
 def _sort_key(candidate: Candidate) -> tuple:
     is_album = candidate.release_group_type == "Album"
@@ -40,7 +55,13 @@ def _sort_key(candidate: Candidate) -> tuple:
 def _identity(candidate: Candidate) -> tuple[str, str, str]:
     """What makes two candidates the same choice, as far as a user cares."""
     meta = candidate.meta
-    return (meta.artist.casefold(), meta.title.casefold(), meta.album.casefold())
+    return (_normalize(meta.artist), _normalize(meta.title), _normalize(meta.album))
+
+
+def recording_identity(candidate: Candidate) -> tuple[str, str]:
+    """What makes two candidates releases of the same recording."""
+    meta = candidate.meta
+    return (_normalize(meta.artist), _normalize(meta.title))
 
 
 def dedupe_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
@@ -65,10 +86,29 @@ def dedupe_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
 def rank_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
     """Order candidates best-first: original official albums, earliest wins.
 
+    Candidates can span more than one recording -- a near-tied AcoustID
+    match can name two different songs (see identify._expand_acoustid).
+    Pooling every release across recordings by quality alone scattered a
+    lone compilation for the true recording between unrelated albums for
+    the wrong one, with nothing marking the boundary. Each recording's
+    releases are kept together instead, ordered highest-confidence
+    recording first -- still a suggestion, not a verdict, since AcoustID
+    scores this close (a few thousandths) are close to a tie.
+
     Duplicates are collapsed, so a release that exists in ten pressings
     offers one choice rather than ten identical-looking ones.
     """
-    return dedupe_candidates(sorted(candidates, key=_sort_key))
+    best_confidence: dict[tuple[str, str], float] = {}
+    for candidate in candidates:
+        identity = recording_identity(candidate)
+        best_confidence[identity] = max(
+            best_confidence.get(identity, candidate.confidence), candidate.confidence
+        )
+
+    def key(candidate: Candidate) -> tuple:
+        return (-best_confidence[recording_identity(candidate)], _sort_key(candidate))
+
+    return dedupe_candidates(sorted(candidates, key=key))
 
 
 def decide(
