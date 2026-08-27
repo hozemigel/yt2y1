@@ -37,16 +37,38 @@ Once published, this becomes:
 uv tool install y1sync    # or: pipx install y1sync
 ```
 
-For fingerprinting, install [chromaprint](https://acoustid.org/chromaprint)
-and get a free [AcoustID API key](https://acoustid.org/new-application):
+### Setting up fingerprinting
+
+Fingerprinting is what makes y1sync accurate, and it needs two things.
+
+**1. chromaprint**, which computes the fingerprint:
+
+```bash
+sudo apt install libchromaprint-tools    # Debian, Ubuntu
+brew install chromaprint                 # macOS
+```
+
+**2. An AcoustID *application* key.**
+
+AcoustID issues two different keys and it is easy to take the wrong one.
+The page at `acoustid.org/api-key`, headed *"Your API Key"*, gives a key
+for **submitting** fingerprints — it will not work here, and the service
+answers `invalid API key`.
+
+The key you need comes from **[acoustid.org/new-application](https://acoustid.org/new-application)**.
+That page shows a short form rather than a key: fill in a name and
+version, register, and the key then appears under *My Applications*.
 
 ```toml
 # ~/.config/y1sync/config.toml
-acoustid_key = "your-key-here"
+acoustid_key = "your-application-key"
 ```
 
-y1sync works without either — it falls back to filename lookup, and every
-track then goes through review.
+Run `y1sync doctor` to confirm both are found.
+
+y1sync still works without either. It falls back to guessing from the
+filename, and every track then goes through review — which is roughly
+what tagging by hand costs, so it is worth the five minutes of setup.
 
 ## Use
 
@@ -55,6 +77,21 @@ y1sync doctor              # check dependencies and find the device
 y1sync scan ~/Music        # identify, tag and rename
 y1sync sync ~/Music        # copy to the Y1
 ```
+
+### How a scan decides
+
+A fingerprint identifies *which recording* a file holds. It cannot say
+which release you want it filed under, because one recording appears on
+the original album, on compilations, and on remasters. So:
+
+- fingerprint matched, one release → tagged automatically
+- fingerprint matched, several releases → you choose, originals listed first
+- no fingerprint, only a filename guess → you always choose
+
+`--yes` skips the middle case, taking the top-ranked release. It will
+**not** accept a filename guess: nothing has confirmed the file even holds
+that track, and accepting one unseen is how a library ends up with the
+wrong artist. Those tracks are left untagged and listed at the end.
 
 Add `--dry-run` to `scan` or `sync` to see what would change without
 writing anything:
@@ -73,6 +110,17 @@ backs up before the first change, writes through a temporary file, and
 flushes to disk before reporting success.
 
 Backups go to `~/.local/share/y1sync/backups/`, never to the device.
+
+## Status
+
+Tested end to end against the real AcoustID and MusicBrainz services and
+against an Innioasis Y1: `doctor` finds the device, `scan` tags and
+renames with cover art, `sync` backs up before writing and leaves no
+partial files behind.
+
+Not yet verified: how a given firmware renders the library screen. If
+your Y1 shows something unexpected after a sync, that is worth an issue —
+include the firmware version.
 
 ## Licence
 
