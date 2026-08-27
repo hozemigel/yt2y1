@@ -348,3 +348,82 @@ def test_an_ordinary_http_failure_still_falls_back(monkeypatch):
     found = identify(Path("Shaggy - Angel.mp3"), api_key="key", session=session)
     assert session.calls[-1] == ITUNES_ENDPOINT
     assert found == []
+
+
+# --- Duration disambiguation -------------------------------------------
+#
+# Found on a real track: AcoustID returned five equally-scored recordings
+# in no dependable order, and expanding "the first three" produced a
+# different album run to run -- once tagging a 156-second track with the
+# album of a 123-second remix. Length settles which recording the file
+# actually holds.
+
+
+MIXED_LENGTHS = {"results": [{"score": 0.97, "recordings": [
+    {"id": "rec-remix", "title": "Be Mine (remix)",
+     "artists": [{"name": "KAMRAD"}], "duration": 123.6},
+    {"id": "rec-original", "title": "Be Mine",
+     "artists": [{"name": "KAMRAD"}], "duration": 156.4},
+]}]}
+
+ORIGINAL_RELEASE = {"releases": [{
+    "title": "Be Mine", "date": "2025-05-16", "status": "Official",
+    "release-group": {"primary-type": "Single", "secondary-types": []},
+}]}
+
+REMIX_RELEASE = {"releases": [{
+    "title": "Be Mine (remix)", "date": "2025-07-04", "status": "Official",
+    "release-group": {"primary-type": "Single", "secondary-types": []},
+}]}
+
+
+def test_the_recording_matching_the_files_length_is_expanded_first(monkeypatch):
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (156, "AQADtEmkRSk"))
+    monkeypatch.setattr("y1sync.identify.MAX_RECORDINGS_EXPANDED", 1)
+    session = RoutingSession({
+        ACOUSTID_ENDPOINT: MIXED_LENGTHS,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-original": ORIGINAL_RELEASE,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-remix": REMIX_RELEASE,
+        ITUNES_ENDPOINT: SHAGGY_ITUNES,
+    })
+
+    found = identify(Path("KAMRAD - Be Mine.mp3"), api_key="key", session=session)
+
+    # The remix is listed first by AcoustID but is 33 seconds shorter.
+    assert [c.meta.album for c in found] == ["Be Mine"]
+    assert f"{MUSICBRAINZ_ENDPOINT}/rec-remix" not in session.calls
+
+
+def test_expansion_order_does_not_depend_on_acoustid_ordering(monkeypatch):
+    # The same recordings in the opposite order must give the same answer.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (156, "AQADtEmkRSk"))
+    monkeypatch.setattr("y1sync.identify.MAX_RECORDINGS_EXPANDED", 1)
+    reversed_payload = {"results": [{
+        "score": 0.97,
+        "recordings": list(reversed(MIXED_LENGTHS["results"][0]["recordings"])),
+    }]}
+    session = RoutingSession({
+        ACOUSTID_ENDPOINT: reversed_payload,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-original": ORIGINAL_RELEASE,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-remix": REMIX_RELEASE,
+        ITUNES_ENDPOINT: SHAGGY_ITUNES,
+    })
+
+    found = identify(Path("KAMRAD - Be Mine.mp3"), api_key="key", session=session)
+    assert [c.meta.album for c in found] == ["Be Mine"]
+
+
+def test_recordings_without_a_duration_still_expand(monkeypatch):
+    # Missing length is not evidence against a recording.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (156, "AQADtEmkRSk"))
+    payload = {"results": [{"score": 0.97, "recordings": [
+        {"id": "rec-original", "title": "Be Mine", "artists": [{"name": "KAMRAD"}]},
+    ]}]}
+    session = RoutingSession({
+        ACOUSTID_ENDPOINT: payload,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-original": ORIGINAL_RELEASE,
+        ITUNES_ENDPOINT: SHAGGY_ITUNES,
+    })
+
+    found = identify(Path("x.mp3"), api_key="key", session=session)
+    assert [c.meta.album for c in found] == ["Be Mine"]

@@ -22,6 +22,11 @@ MUSICBRAINZ_RATE_LIMIT = 1.1
 # a rate-limited MusicBrainz request, and past the first few the matches
 # are usually the same recording on yet another release.
 MAX_RECORDINGS_EXPANDED = 3
+
+# How far a recording's stated length may sit from the file's before it is
+# treated as different audio. Pressings of one recording differ by a second
+# or two; an edit or a remix differs by far more.
+DURATION_TOLERANCE = 8.0
 TIMEOUT = 15
 
 # Debris that YouTube rips leave in filenames.
@@ -214,7 +219,16 @@ def fingerprint(path: Path) -> tuple[int, str] | None:
     return int(data["duration"]), data["fingerprint"]
 
 
-def _expand_acoustid(payload: dict, http) -> list[Candidate]:
+def _duration_rank(recording: dict, duration: float | None) -> tuple[int, float]:
+    """Sort key placing recordings whose length matches the file first."""
+    stated = recording.get("duration")
+    if duration is None or stated is None:
+        return (1, 0.0)
+    delta = abs(float(stated) - duration)
+    return (0 if delta <= DURATION_TOLERANCE else 1, delta)
+
+
+def _expand_acoustid(payload: dict, http, duration: float | None = None) -> list[Candidate]:
     """Turn an AcoustID hit into candidates, via MusicBrainz for releases.
 
     AcoustID names the recording; MusicBrainz says which releases carry
@@ -230,9 +244,18 @@ def _expand_acoustid(payload: dict, http) -> list[Candidate]:
     best = results[0]
     score = best.get("score", 0.0)
 
+    # AcoustID returns equally-scored recordings in no dependable order, so
+    # expanding "the first three" gave a different answer run to run. Length
+    # settles it: a 123-second remix is not the 156-second track on disk,
+    # however well its fingerprint matches.
+    recordings = sorted(
+        best.get("recordings") or [],
+        key=lambda r: _duration_rank(r, duration),
+    )
+
     candidates: list[Candidate] = []
     seen: set[str] = set()
-    for recording in (best.get("recordings") or [])[:MAX_RECORDINGS_EXPANDED]:
+    for recording in recordings[:MAX_RECORDINGS_EXPANDED]:
         recording_id = recording.get("id")
         if not recording_id or recording_id in seen:
             continue
@@ -268,7 +291,7 @@ def identify(path: Path, api_key: str | None = None, session=None) -> list[Candi
                 payload = response.json()
                 if payload.get("status") == "error":
                     _raise_if_key_rejected(payload)
-                parsed = _expand_acoustid(payload, http)
+                parsed = _expand_acoustid(payload, http, duration)
                 if parsed:
                     return parsed
             else:
