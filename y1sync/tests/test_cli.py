@@ -1,9 +1,24 @@
 from pathlib import Path
 
 import pytest
-from y1sync.cli import build_parser, cmd_menu, discover_music_folders, main
+from y1sync.cli import build_parser, cmd_download_and_sync, cmd_menu, discover_music_folders, main
 from y1sync.config import Config, load_config, save_config
 from y1sync.models import Candidate, TrackMeta
+
+
+class _FakeDownloadOptions:
+    """Stands in for yt2mp3's DownloadOptions.
+
+    y1sync only imports yt2mp3 lazily, at the point of use, so it stays
+    installable and testable without yt2mp3 present. Referencing the real
+    class here would defeat that by making collection of this whole file
+    depend on yt2mp3 being installed.
+    """
+
+    def __init__(self, url, output_dir, quality):
+        self.url = url
+        self.output_dir = output_dir
+        self.quality = quality
 
 
 def _confident_candidate() -> Candidate:
@@ -452,10 +467,24 @@ def test_respects_the_limit(tmp_path):
 
 
 # --- interactive menu ----------------------------------------------------
+#
+# Menu numbering: 1=download, 2=update player, 3=change folder,
+# 4=check setup, 5=quit. Every test below that reaches the main loop
+# stubs out cmd_download_and_sync (or _load_yt2mp3) so a stray digit
+# typed for another prompt can never be read as a real YouTube URL and
+# reach yt-dlp for real -- found the hard way when an old, unmigrated
+# version of these tests hung on a real network call.
 
 
 def _config_path(tmp_path):
     return tmp_path / "config.toml"
+
+
+def _stub_download(monkeypatch, calls):
+    monkeypatch.setattr(
+        "y1sync.cli.cmd_download_and_sync",
+        lambda folder, input_fn=input, output_fn=print: calls.append(("download", folder)),
+    )
 
 
 def test_first_run_prompts_for_a_folder_and_saves_it(tmp_path, monkeypatch):
@@ -464,7 +493,7 @@ def test_first_run_prompts_for_a_folder_and_saves_it(tmp_path, monkeypatch):
     music.mkdir()
     monkeypatch.setattr("y1sync.cli.discover_music_folders", lambda root, limit=6: [music])
 
-    replies = iter(["1", "4"])  # pick the discovered folder, then quit
+    replies = iter(["1", "5"])  # pick the discovered folder, then quit
     lines = []
     cmd_menu(input_fn=lambda _: next(replies), output_fn=lines.append)
 
@@ -478,38 +507,54 @@ def test_a_saved_folder_skips_the_first_run_prompt(tmp_path, monkeypatch):
     save_config(Config(music_folder=str(tmp_path)), path)
 
     lines = []
-    cmd_menu(input_fn=lambda _: "4", output_fn=lines.append)
+    cmd_menu(input_fn=lambda _: "5", output_fn=lines.append)
 
     assert not any("Where are your music files?" in line for line in lines)
 
 
-def test_menu_option_1_scans_then_syncs(tmp_path, monkeypatch):
+def test_menu_option_1_offers_the_download_flow(tmp_path, monkeypatch):
     path = _config_path(tmp_path)
     monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
     save_config(Config(music_folder=str(tmp_path)), path)
 
     calls = []
+    _stub_download(monkeypatch, calls)
+
+    replies = iter(["1", "5"])
+    cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert calls == [("download", str(tmp_path))]
+
+
+def test_menu_option_2_scans_then_syncs(tmp_path, monkeypatch):
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    calls = []
+    _stub_download(monkeypatch, calls)
     monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: calls.append(("scan", folder)))
     monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: calls.append(("sync", folder)))
 
-    replies = iter(["1", "4"])
+    replies = iter(["2", "5"])
     cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
 
     assert calls == [("scan", str(tmp_path)), ("sync", str(tmp_path))]
 
 
-def test_menu_option_3_checks_setup(tmp_path, monkeypatch):
+def test_menu_option_4_checks_setup(tmp_path, monkeypatch):
     path = _config_path(tmp_path)
     monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
     save_config(Config(music_folder=str(tmp_path)), path)
 
     calls = []
-    monkeypatch.setattr("y1sync.cli.cmd_doctor", lambda: calls.append("doctor"))
+    _stub_download(monkeypatch, calls)
+    monkeypatch.setattr("y1sync.cli.cmd_doctor", lambda: calls.append(("doctor",)))
 
-    replies = iter(["3", "4"])
+    replies = iter(["4", "5"])
     cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
 
-    assert calls == ["doctor"]
+    assert calls == [("doctor",)]
 
 
 def test_menu_rejects_an_invalid_choice_and_reprompts(tmp_path, monkeypatch):
@@ -518,14 +563,14 @@ def test_menu_rejects_an_invalid_choice_and_reprompts(tmp_path, monkeypatch):
     save_config(Config(music_folder=str(tmp_path)), path)
 
     lines = []
-    replies = iter(["banana", "4"])
+    replies = iter(["banana", "5"])
     result = cmd_menu(input_fn=lambda _: next(replies), output_fn=lines.append)
 
     assert result == 0
     assert any("Enter a number" in line for line in lines)
 
 
-def test_menu_option_2_changes_the_saved_folder(tmp_path, monkeypatch):
+def test_menu_option_3_changes_the_saved_folder(tmp_path, monkeypatch):
     path = _config_path(tmp_path)
     monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
     save_config(Config(music_folder=str(tmp_path)), path)
@@ -535,7 +580,129 @@ def test_menu_option_2_changes_the_saved_folder(tmp_path, monkeypatch):
     # No discovered folders offered, so option 1 is "enter a path manually".
     monkeypatch.setattr("y1sync.cli.discover_music_folders", lambda root, limit=6: [])
 
-    inputs = iter(["2", "1", str(new_folder), "4"])
+    inputs = iter(["3", "1", str(new_folder), "5"])
     cmd_menu(input_fn=lambda _: next(inputs), output_fn=lambda *a: None)
 
     assert load_config(path).music_folder == str(new_folder)
+
+
+# --- cmd_download_and_sync ------------------------------------------------
+
+
+def test_download_reports_when_yt2mp3_is_not_installed(monkeypatch):
+    monkeypatch.setattr("y1sync.cli._load_yt2mp3", lambda: None)
+
+    lines = []
+    result = cmd_download_and_sync("/music", input_fn=lambda _: "", output_fn=lines.append)
+
+    assert result == 1
+    assert any("pip install ./yt2mp3" in line for line in lines)
+
+
+def test_download_reports_a_missing_ffmpeg(monkeypatch):
+    class FakeFfmpegError(RuntimeError):
+        pass
+
+    def raise_ffmpeg_missing():
+        raise FakeFfmpegError("ffmpeg not found")
+
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (raise_ffmpeg_missing, FakeFfmpegError, object, lambda opts: 0),
+    )
+
+    lines = []
+    result = cmd_download_and_sync("/music", input_fn=lambda _: "", output_fn=lines.append)
+
+    assert result == 1
+    assert any("ffmpeg not found" in line for line in lines)
+
+
+def test_download_rejects_an_empty_url(monkeypatch):
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (lambda: None, RuntimeError, object, lambda opts: 0),
+    )
+
+    lines = []
+    result = cmd_download_and_sync("/music", input_fn=lambda _: "", output_fn=lines.append)
+
+    assert result == 1
+    assert any("No URL entered" in line for line in lines)
+
+
+def test_download_passes_the_folder_url_and_quality_through(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_download(opts):
+        captured["url"] = opts.url
+        captured["output_dir"] = opts.output_dir
+        captured["quality"] = opts.quality
+        return 0
+
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, fake_download),
+    )
+    monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: None)
+    monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: None)
+
+    replies = iter(["https://youtu.be/abc123", "256"])
+    cmd_download_and_sync(str(tmp_path), input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert captured["url"] == "https://youtu.be/abc123"
+    assert captured["output_dir"] == str(tmp_path)
+    assert captured["quality"] == "256"
+
+
+def test_download_defaults_quality_to_320_on_enter(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_download(opts):
+        captured["quality"] = opts.quality
+        return 0
+
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, fake_download),
+    )
+    monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: None)
+    monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: None)
+
+    replies = iter(["https://youtu.be/abc123", ""])  # blank quality
+    cmd_download_and_sync(str(tmp_path), input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert captured["quality"] == "320"
+
+
+def test_download_scans_and_syncs_the_folder_after_success(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, lambda opts: 0),
+    )
+    monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: calls.append(("scan", folder)))
+    monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: calls.append(("sync", folder)))
+
+    replies = iter(["https://youtu.be/abc123", "320"])
+    cmd_download_and_sync(str(tmp_path), input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert calls == [("scan", str(tmp_path)), ("sync", str(tmp_path))]
+
+
+def test_download_failure_skips_scan_and_sync(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, lambda opts: 1),
+    )
+    monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: calls.append(("scan", folder)))
+    monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: calls.append(("sync", folder)))
+
+    replies = iter(["https://youtu.be/abc123", "320"])
+    result = cmd_download_and_sync(
+        str(tmp_path), input_fn=lambda _: next(replies), output_fn=lambda *a: None
+    )
+
+    assert result == 1
+    assert calls == []

@@ -381,6 +381,55 @@ def _prompt_for_music_folder(input_fn=input, output_fn=print) -> str:
         return str(folder)
 
 
+def _load_yt2mp3():
+    """Import yt2mp3's pieces lazily, or None if it isn't installed.
+
+    yt2mp3 is a sibling tool, not a hard dependency of y1sync: importing it
+    only when the download menu option is actually used keeps y1sync
+    installable and testable entirely on its own.
+    """
+    try:
+        from yt2mp3.checks import ensure_ffmpeg, FfmpegNotFoundError
+        from yt2mp3.downloader import DownloadOptions, download
+    except ImportError:
+        return None
+    return ensure_ffmpeg, FfmpegNotFoundError, DownloadOptions, download
+
+
+def cmd_download_and_sync(folder: str, input_fn=input, output_fn=print) -> int:
+    """Download a YouTube URL into folder via yt2mp3, then tag and sync it.
+
+    The full flow in one menu choice: download, identify and tag, send to
+    the device -- rather than requiring yt2mp3 and y1sync run separately.
+    """
+    loaded = _load_yt2mp3()
+    if loaded is None:
+        output_fn("yt2mp3 isn't installed. Install it with: pip install ./yt2mp3")
+        return 1
+    ensure_ffmpeg, FfmpegNotFoundError, DownloadOptions, download = loaded
+
+    try:
+        ensure_ffmpeg()
+    except FfmpegNotFoundError as exc:
+        output_fn(str(exc))
+        return 1
+
+    url = input_fn("YouTube URL: ").strip()
+    if not url:
+        output_fn("No URL entered.")
+        return 1
+    quality = input_fn("Bitrate in kbps [320]: ").strip() or "320"
+
+    exit_code = download(DownloadOptions(url=url, output_dir=folder, quality=quality))
+    if exit_code != 0:
+        output_fn("Download failed.")
+        return exit_code
+
+    cmd_scan(folder, dry_run=False, yes=False, verbose=False)
+    cmd_sync(folder, dry_run=False, verbose=False)
+    return 0
+
+
 def cmd_menu(input_fn=input, output_fn=print) -> int:
     """The no-arguments entry point: a numbered menu instead of flags and paths.
 
@@ -393,20 +442,23 @@ def cmd_menu(input_fn=input, output_fn=print) -> int:
 
     while True:
         output_fn("")
-        output_fn("1. Update player  (find new tracks, then send them over)")
-        output_fn("2. Change music folder")
-        output_fn("3. Check setup")
-        output_fn("4. Quit")
+        output_fn("1. Download from YouTube  (then tag and send to player)")
+        output_fn("2. Update player  (find new tracks, then send them over)")
+        output_fn("3. Change music folder")
+        output_fn("4. Check setup")
+        output_fn("5. Quit")
         reply = input_fn("Choose a number: ").strip()
 
         if reply == "1":
+            cmd_download_and_sync(folder, input_fn, output_fn)
+        elif reply == "2":
             cmd_scan(folder, dry_run=False, yes=False, verbose=False)
             cmd_sync(folder, dry_run=False, verbose=False)
-        elif reply == "2":
-            folder = _prompt_for_music_folder(input_fn, output_fn)
         elif reply == "3":
-            cmd_doctor()
+            folder = _prompt_for_music_folder(input_fn, output_fn)
         elif reply == "4":
+            cmd_doctor()
+        elif reply == "5":
             return 0
         else:
             output_fn("Enter a number from the list.")
