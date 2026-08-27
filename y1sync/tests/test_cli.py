@@ -232,6 +232,65 @@ def test_doctor_reports_the_cache_location(tmp_path, capsys, monkeypatch):
     assert "somecache" in capsys.readouterr().out
 
 
+def _stub_doctor_environment(monkeypatch, *, ffmpeg=True, fpcalc=True, key="abc", device=None):
+    monkeypatch.setattr(
+        "y1sync.cli.shutil.which",
+        lambda name: (f"/usr/bin/{name}" if {"ffmpeg": ffmpeg, "fpcalc": fpcalc}[name] else None),
+    )
+    monkeypatch.setattr("y1sync.cli.load_config", lambda: Config(acoustid_key=key))
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device] if device else [])
+
+
+def test_doctor_marks_every_present_tool_with_a_checkmark(capsys, monkeypatch):
+    _stub_doctor_environment(monkeypatch)
+    main(["doctor"])
+    out = capsys.readouterr().out
+    assert out.count("✓") == 3  # ffmpeg, chromaprint, AcoustID key -- not the device
+    assert "✗" in out  # the device, since none was stubbed in
+
+
+def test_doctor_shows_a_hint_only_for_a_missing_item(capsys, monkeypatch):
+    _stub_doctor_environment(monkeypatch, key=None)
+    main(["doctor"])
+    out = capsys.readouterr().out
+    assert "✗ AcoustID key" in out
+    assert "acoustid.org/new-application" in out
+    # ffmpeg is present, so its line must not carry a parenthetical hint.
+    assert "✓ ffmpeg\n" in out
+
+
+def test_doctor_says_ready_when_everything_is_present(capsys, monkeypatch):
+    _stub_doctor_environment(monkeypatch)
+    main(["doctor"])
+    out = capsys.readouterr().out
+    assert "You're ready" in out
+    assert "Almost there" not in out
+
+
+def test_doctor_ready_message_mentions_the_device_when_connected(capsys, monkeypatch):
+    _stub_doctor_environment(monkeypatch, device=Path("/media/y1"))
+    main(["doctor"])
+    out = capsys.readouterr().out
+    assert "the Y1 is connected" in out
+
+
+def test_doctor_says_not_ready_when_a_prerequisite_is_missing(capsys, monkeypatch):
+    _stub_doctor_environment(monkeypatch, fpcalc=False)
+    main(["doctor"])
+    out = capsys.readouterr().out
+    assert "Almost there" in out
+    assert "chromaprint" in out
+    assert "You're ready" not in out
+
+
+def test_doctor_readiness_does_not_depend_on_the_device(capsys, monkeypatch):
+    # A Y1 that isn't plugged in yet is not a setup problem.
+    _stub_doctor_environment(monkeypatch, device=None)
+    main(["doctor"])
+    out = capsys.readouterr().out
+    assert "You're ready" in out
+
+
 def test_scan_recurses_into_subdirectories(tmp_path, capsys, monkeypatch):
     # "y1sync scan ~/Music" on a library organised into folders must not
     # report "No MP3 files".

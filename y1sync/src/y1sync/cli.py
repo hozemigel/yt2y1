@@ -103,39 +103,51 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_doctor() -> int:
     config = load_config()
-    print("y1sync environment check\n")
     ffmpeg_found = shutil.which("ffmpeg")
     fpcalc_found = shutil.which("fpcalc")
-    for tool, purpose in (("ffmpeg", "audio decoding"),
-                          ("fpcalc", "audio fingerprinting (chromaprint)")):
-        found = shutil.which(tool)
-        status = found if found else "NOT FOUND"
-        print(f"  {tool:8} {status}   ({purpose})")
-
-    key_status = "configured" if config.acoustid_key else "NOT CONFIGURED"
-    print(f"  {'API key':8} {key_status}   (AcoustID)")
-
-    # Identifications and the answers to review questions are remembered
-    # here, so a wrong answer stays wrong until this is deleted.
-    print(f"\n  Cache    {CACHE_ROOT}")
-    print("           Delete it to re-identify tracks and be asked again.")
-
-    if not config.acoustid_key or not fpcalc_found:
-        print("\nWithout chromaprint and an AcoustID key, tracks are identified")
-        print("from their filenames alone and every one needs manual review.")
-        print("Install chromaprint and get a free key at https://acoustid.org/")
-
     devices = find_devices()
     device = devices[0] if devices else None
-    print(f"\n  Devices  {device or 'no Innioasis Y1 found'}")
+
+    # (label, present, hint shown only when missing)
+    checks = [
+        ("ffmpeg", bool(ffmpeg_found),
+         "needed to decode audio -- see the README for install steps"),
+        ("chromaprint", bool(fpcalc_found),
+         "needed for accurate song matching -- see the README"),
+        ("AcoustID key", bool(config.acoustid_key),
+         "free, 2 minutes: https://acoustid.org/new-application"),
+        ("Y1 player", bool(device),
+         "not connected"),
+    ]
+
+    print("Checking setup...\n")
+    for label, present, hint in checks:
+        mark = "✓" if present else "✗"
+        print(f"  {mark} {label}" + (f"  ({hint})" if not present else ""))
 
     print()
-    if ffmpeg_found and fpcalc_found and config.acoustid_key:
-        print("Ready — run `y1sync scan <folder>` next.")
+    # Whether the device happens to be plugged in right now doesn't affect
+    # whether the software side is ready -- that's checked separately by
+    # sync itself, and nagging about it here would read as an error on
+    # every run before you've connected the player at all.
+    ready = ffmpeg_found and fpcalc_found and bool(config.acoustid_key)
+    if ready and device:
+        print(f"You're ready -- the Y1 is connected at {device}. "
+              'Choose "Update player" from the menu.')
+    elif ready:
+        print('You\'re ready. Connect the Y1 over USB, then choose '
+              '"Update player" from the menu.')
     else:
-        print("Not fully set up — see above. Once fixed, run `y1sync scan <folder>`.")
-    if device:
-        print(f"Y1 detected at {device} — `y1sync sync <folder>` will copy there once scanned.")
+        first_missing = next(label for label, present, _ in checks[:3] if not present)
+        print(f"Almost there -- fix {first_missing} above, then run this again.")
+
+    # Identifications and the answers to review questions are remembered
+    # here, so a wrong answer stays wrong until this is deleted. Kept out
+    # of the checklist above: it's a troubleshooting detail, not part of
+    # whether setup is ready.
+    print("\n" + "-" * 40)
+    print(f"Cache: {CACHE_ROOT}")
+    print("(delete this folder to re-check songs already tagged)")
     return 0
 
 
