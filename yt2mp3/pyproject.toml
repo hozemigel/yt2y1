@@ -1,0 +1,21 @@
+[project]
+name = "yt2mp3"
+version = "0.1.0"
+description = "Download a YouTube video or playlist and convert it to MP3."
+requires-python = ">=3.9"
+dependencies = [
+    "yt-dlp>=2024.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+yt2mp3 = "yt2mp3.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
