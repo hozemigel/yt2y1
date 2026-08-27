@@ -247,6 +247,25 @@ python -m pip install ./y1sync
 if ($LASTEXITCODE -ne 0) { Pop-Location; throw "Installing y1sync failed." }
 Pop-Location
 
+# pip installs console scripts (y1sync.exe, yt2mp3.exe, ...) into a
+# per-user Scripts folder when it can't write to Python's own
+# site-packages -- which is the common case for a non-admin winget
+# install. That folder isn't necessarily on PATH at all (not even after
+# Update-SessionPath), unlike the installer-managed tools above: pip
+# itself warns "not on PATH" right in its own output when this happens.
+# Asking Python for its actual user-site path (rather than guessing the
+# "Roaming\Python\Python3XX\Scripts" pattern) keeps this correct across
+# Python versions.
+$userSiteOutput = python -m site --user-site 2>$null
+$userSite = if ($userSiteOutput) { ($userSiteOutput | Select-Object -Last 1).Trim() } else { $null }
+if ($userSite) {
+    $scriptsDir = Join-Path (Split-Path $userSite -Parent) "Scripts"
+    if (Test-Path $scriptsDir) {
+        Add-ToUserPath $scriptsDir
+        Update-SessionPath
+    }
+}
+
 # --- 8. AcoustID key -------------------------------------------------------
 
 $configDir = Join-Path $env:USERPROFILE ".config\y1sync"
