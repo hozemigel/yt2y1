@@ -106,6 +106,34 @@ def parse_acoustid_response(payload: dict, score: float | None = None) -> list[C
     return candidates
 
 
+class AcoustIDKeyRejected(Exception):
+    """AcoustID refused the configured key.
+
+    Raised rather than swallowed because the alternative is worse than an
+    error: identification silently drops to guessing from the filename,
+    which is the failure mode this whole tool exists to prevent, while the
+    user believes fingerprinting is working.
+    """
+
+
+# AcoustID error codes that mean the key itself is unusable, so no
+# amount of retrying or moving to the next file will help.
+_KEY_ERROR_CODES = {4, 6}
+
+
+def _raise_if_key_rejected(payload: dict) -> None:
+    """Turn AcoustID's "invalid API key" into a hard stop."""
+    error = payload.get("error") or {}
+    if error.get("code") in _KEY_ERROR_CODES:
+        raise AcoustIDKeyRejected(
+            f"AcoustID rejected the configured key: {error.get('message', 'invalid')}. "
+            "Fingerprinting is unavailable, so tracks would be identified from "
+            "their filenames alone. Get an application key at "
+            "https://acoustid.org/new-application and set acoustid_key in "
+            "~/.config/y1sync/config.toml"
+        )
+
+
 def fingerprint(path: Path) -> tuple[int, str] | None:
     """Return (duration, fingerprint) from chromaprint's fpcalc, or None."""
     try:
@@ -137,11 +165,20 @@ def identify(path: Path, api_key: str | None = None, session=None) -> list[Candi
             }, timeout=TIMEOUT)
             if response.ok:
                 payload = response.json()
+                if payload.get("status") == "error":
+                    _raise_if_key_rejected(payload)
                 results = payload.get("results") or []
                 if results:
                     parsed = parse_acoustid_response(payload)
                     if parsed:
                         return parsed
+            else:
+                # A 4xx carries AcoustID's own error body; read it before
+                # deciding this was merely a transient failure.
+                try:
+                    _raise_if_key_rejected(response.json())
+                except ValueError:
+                    pass
 
     response = http.get(ITUNES_ENDPOINT, params={
         "term": guess_query_from_filename(path), "entity": "song", "limit": 5,

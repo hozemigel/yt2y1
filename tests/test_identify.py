@@ -1,6 +1,7 @@
 from pathlib import Path
+import pytest
 from y1sync.identify import (
-    ACOUSTID_ENDPOINT, ITUNES_ENDPOINT, guess_query_from_filename, identify,
+    ACOUSTID_ENDPOINT, ITUNES_ENDPOINT, AcoustIDKeyRejected, guess_query_from_filename, identify,
     parse_itunes_response, parse_acoustid_response,
 )
 
@@ -222,3 +223,79 @@ def test_falls_back_when_chromaprint_is_missing(monkeypatch):
 
     assert [c.source for c in found] == ["itunes"]
     assert session.calls == [ITUNES_ENDPOINT]
+
+
+# --- Rejected key ------------------------------------------------------
+#
+# Found by running the tool against the real AcoustID service with a key
+# of the wrong kind (a user key rather than an application key). The
+# service answered {"error": {"code": 4, "message": "invalid API key"}}
+# and identification silently fell through to guessing from the filename
+# -- the exact failure this tool exists to prevent, made invisible.
+
+
+class ErrorSession:
+    def __init__(self, payload, status_ok=True):
+        self.payload = payload
+        self.status_ok = status_ok
+        self.calls = []
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append(url)
+        session = self
+
+        class Response:
+            ok = session.status_ok
+
+            @staticmethod
+            def json():
+                return session.payload
+
+        return Response()
+
+
+KEY_REJECTED = {"error": {"code": 4, "message": "invalid API key"}, "status": "error"}
+
+
+def test_a_rejected_key_raises_instead_of_guessing(monkeypatch):
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (297, "AQADtEmSREoy"))
+    session = ErrorSession(KEY_REJECTED, status_ok=False)
+
+    with pytest.raises(AcoustIDKeyRejected):
+        identify(Path("Black - Wonderful Life.mp3"), api_key="bad", session=session)
+
+    # It must not have quietly asked iTunes instead.
+    assert ITUNES_ENDPOINT not in session.calls
+
+
+def test_a_rejected_key_is_caught_on_a_200_response_too(monkeypatch):
+    # AcoustID reports some errors with a 200 and an error body.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (297, "AQADtEmSREoy"))
+    session = ErrorSession(KEY_REJECTED, status_ok=True)
+
+    with pytest.raises(AcoustIDKeyRejected):
+        identify(Path("Black - Wonderful Life.mp3"), api_key="bad", session=session)
+
+
+def test_the_message_names_the_fix(monkeypatch):
+    # A user hitting this needs to know which kind of key to get.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (297, "AQADtEmSREoy"))
+    session = ErrorSession(KEY_REJECTED, status_ok=False)
+    try:
+        identify(Path("x.mp3"), api_key="bad", session=session)
+    except AcoustIDKeyRejected as exc:
+        assert "new-application" in str(exc)
+        assert "config.toml" in str(exc)
+    else:
+        raise AssertionError("expected AcoustIDKeyRejected")
+
+
+def test_an_ordinary_http_failure_still_falls_back(monkeypatch):
+    # A transient outage is not a bad key: fall through as before.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (297, "AQADtEmSREoy"))
+    session = ErrorSession({"error": {"code": 3, "message": "server busy"}}, status_ok=False)
+    session.payloads = None
+
+    found = identify(Path("Shaggy - Angel.mp3"), api_key="key", session=session)
+    assert session.calls[-1] == ITUNES_ENDPOINT
+    assert found == []

@@ -9,7 +9,7 @@ from .artwork import artwork_url_for, fetch_artwork
 from .cache import ContentCache
 from .config import load_config
 from .device import backup_device, find_devices, safe_copy
-from .identify import identify
+from .identify import AcoustIDKeyRejected, identify
 from .naming import rename_file, resolve_collision, safe_filename
 from .ranking import decide
 from .review import choose_candidate
@@ -166,6 +166,13 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
             write_tags(path, pick.meta, artwork)
             rename_file(path, new_name)
             print(f"  tagged   {new_name}")
+        except AcoustIDKeyRejected as exc:
+            # A bad key is a property of the run, not of this file: every
+            # remaining track would fail identically, and finishing the
+            # library on filename guesses is exactly what this tool exists
+            # to prevent. Stop and say so once.
+            print(f"\n{exc}")
+            return 1
         except Exception as exc:
             failures += 1
             print(f"  FAILED   {path.name}: {exc}")
