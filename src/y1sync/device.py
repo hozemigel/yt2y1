@@ -149,3 +149,20 @@ def safe_copy(src: Path, dst: Path) -> None:
         raise
 
     os.replace(temp, dst)
+
+    # fsync above only guarantees the temp file's bytes; the rename that
+    # makes them visible under dst's name is a separate write to the
+    # parent directory, and that one was never flushed. Found on a real
+    # Y1: unplugging right after "safe to disconnect" left a file present
+    # at the right name with the right entry, but 0 bytes -- the rename
+    # had not reached the medium yet. Not supported on Windows, where a
+    # directory cannot be opened like this; the copy already succeeded,
+    # so a failure here only loses this extra guarantee, not the data.
+    try:
+        dir_fd = os.open(dst.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError:
+        pass

@@ -179,3 +179,43 @@ def test_safe_copy_cleans_up_the_temp_file_after_a_failed_copy(tmp_path, monkeyp
 
     assert dst.read_bytes() == b"old"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["dst.mp3", "src.mp3"]
+
+
+def test_safe_copy_fsyncs_the_directory_after_the_rename(tmp_path, monkeypatch):
+    # Found on a real Y1: unplugging right after "safe to disconnect" left
+    # a 0-byte file at the right name. The rename's directory entry was
+    # never fsynced, only the temp file's data was.
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "dst.mp3"
+
+    synced_fds = []
+    real_fsync = os.fsync
+
+    def spy_fsync(fd):
+        synced_fds.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", spy_fsync)
+    safe_copy(src, dst)
+
+    assert len(synced_fds) == 2  # the temp file's data, then the directory
+
+
+def test_safe_copy_survives_a_directory_that_cannot_be_fsynced(tmp_path, monkeypatch):
+    # Windows cannot open a directory this way; the file must still land.
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "dst.mp3"
+
+    real_open = os.open
+
+    def broken_open(path, flags, *a, **k):
+        if path == str(dst.parent):
+            raise OSError("simulated: directories cannot be opened this way")
+        return real_open(path, flags, *a, **k)
+
+    monkeypatch.setattr(os, "open", broken_open)
+    safe_copy(src, dst)
+
+    assert dst.read_bytes() == b"payload"
