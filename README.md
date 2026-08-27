@@ -50,9 +50,29 @@ right here: [install-linux.sh](install-linux.sh).
 
 On a non-`apt` distro, the manual steps below work anywhere Python does.
 
+## macOS: one-line install
+
+Open Terminal and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-macos.sh | bash
+```
+
+This installs Homebrew itself if it's missing, then Python, git, ffmpeg
+and chromaprint via Homebrew if any of those are missing, downloads
+yt2y1, installs both tools into one virtual environment shared between
+them, adds them to your PATH, walks you through the free AcoustID key,
+and finishes by running `y1sync doctor` so you can see everything is
+actually ready. It's safe to run again if anything gets interrupted —
+already-done steps are skipped.
+
+If you'd rather see what it does before running it, the script itself is
+right here: [install-macos.sh](install-macos.sh).
+
 ## What you need before you start
 
-*(macOS, any other Linux, or if you want to install by hand instead.)*
+*(Any other Linux or package manager, or if you want to install by hand
+instead.)*
 
 | Requirement | What it's for | Get it |
 |---|---|---|
