@@ -4,7 +4,7 @@ Download a YouTube video or playlist and convert it to MP3.
 
 ## Requirements
 
-- **Python 3.9+**
+- **Python 3.10+**
 - **ffmpeg**, for the actual audio conversion:
   ```bash
   brew install ffmpeg          # macOS
