@@ -28,9 +28,31 @@ already-done steps are skipped.
 If you'd rather see what it does before running it, the script itself is
 right here: [install-windows.ps1](install-windows.ps1).
 
+## Linux: one-line install
+
+*(Debian/Ubuntu-based systems -- anything with `apt`.)*
+
+Open a terminal and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-linux.sh | bash
+```
+
+This installs Python, git, ffmpeg and chromaprint via `apt` if any are
+missing, downloads yt2y1, installs both tools into one virtual environment
+shared between them, adds them to your PATH, walks you through the free
+AcoustID key, and finishes by running `y1sync doctor` so you can see
+everything is actually ready. It's safe to run again if anything gets
+interrupted — already-done steps are skipped.
+
+If you'd rather see what it does before running it, the script itself is
+right here: [install-linux.sh](install-linux.sh).
+
+On a non-`apt` distro, the manual steps below work anywhere Python does.
+
 ## What you need before you start
 
-*(macOS and Linux, or if you want to install by hand on Windows too.)*
+*(macOS, any other Linux, or if you want to install by hand instead.)*
 
 | Requirement | What it's for | Get it |
 |---|---|---|
