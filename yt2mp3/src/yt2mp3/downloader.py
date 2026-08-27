@@ -10,6 +10,13 @@ class DownloadOptions:
     output_dir: str = "."
     quality: str = "320"
     filename_template: str = "%(title)s.%(ext)s"
+    # yt-dlp downloads the whole playlist by default whenever a URL carries
+    # a list= parameter -- which includes YouTube's auto-generated "Mix"
+    # radio links, not just playlists a user actually built. A single video
+    # link opened from a Mix carries that parameter too, so the naive
+    # default silently turns "get me this one song" into a few-hundred-track
+    # download. Single-video is the safer default; playlist=True opts in.
+    playlist: bool = False
 
 
 def _progress_hook(d):
@@ -49,6 +56,7 @@ def build_ydl_opts(opts: DownloadOptions) -> dict:
         "progress_hooks": [_progress_hook],
         "postprocessor_hooks": [_postprocessor_hook],
         "ignoreerrors": True,
+        "noplaylist": not opts.playlist,
     }
 
 

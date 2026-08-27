@@ -30,6 +30,17 @@ def build_parser() -> argparse.ArgumentParser:
         default="%(title)s.%(ext)s",
         help="yt-dlp output filename template (default: %%(title)s.%%(ext)s)",
     )
+    parser.add_argument(
+        "--playlist",
+        action="store_true",
+        # A single video's URL carries the same list= parameter as an
+        # intentional playlist whenever it was opened from one -- including
+        # YouTube's auto-generated "Mix" radio links, which can run to
+        # hundreds of tracks. Downloading just that one video is the far
+        # more common intent, so it's the default; this opts into the rest.
+        help="Download the whole playlist the URL belongs to, "
+             "not just the one video (default: single video only)",
+    )
     return parser
 
 
@@ -48,6 +59,7 @@ def main(argv=None) -> int:
         output_dir=args.output_dir,
         quality=args.quality,
         filename_template=args.filename_template,
+        playlist=args.playlist,
     )
     return download(opts)
 

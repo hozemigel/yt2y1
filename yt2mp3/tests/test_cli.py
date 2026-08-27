@@ -8,6 +8,13 @@ def test_build_parser_defaults():
     assert args.output_dir == cli.DEFAULT_OUTPUT_DIR
     assert args.quality == "320"
     assert args.filename_template == "%(title)s.%(ext)s"
+    assert args.playlist is False
+
+
+def test_build_parser_accepts_playlist_flag():
+    parser = cli.build_parser()
+    args = parser.parse_args(["https://youtu.be/x", "--playlist"])
+    assert args.playlist is True
 
 
 def test_build_parser_custom_flags():
@@ -59,6 +66,7 @@ def test_main_calls_download_with_parsed_options(monkeypatch):
     assert captured["opts"].output_dir == "out"
     assert captured["opts"].quality == "320"
     assert captured["opts"].filename_template == "%(id)s.%(ext)s"
+    assert captured["opts"].playlist is False
 
 
 def test_main_returns_nonzero_when_download_fails(monkeypatch):

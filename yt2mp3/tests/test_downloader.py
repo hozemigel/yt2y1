@@ -15,6 +15,20 @@ def test_build_ydl_opts_defaults():
     assert pp["preferredquality"] == "320"
 
 
+def test_defaults_to_single_video_even_with_a_playlist_url():
+    # Found for real: a video opened from a YouTube auto-generated "Mix"
+    # carries the same list= parameter as an intentional playlist, and
+    # yt-dlp's own default would download the whole mix -- hundreds of
+    # tracks -- for someone who wanted the one song they clicked.
+    opts = DownloadOptions(url="https://youtu.be/x?list=RDxyz&start_radio=1")
+    assert build_ydl_opts(opts)["noplaylist"] is True
+
+
+def test_playlist_true_downloads_the_whole_playlist():
+    opts = DownloadOptions(url="https://youtu.be/x?list=PLxyz", playlist=True)
+    assert build_ydl_opts(opts)["noplaylist"] is False
+
+
 def test_build_ydl_opts_custom_values():
     opts = DownloadOptions(
         url="https://youtu.be/x",
