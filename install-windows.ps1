@@ -4,10 +4,11 @@
 #
 #   irm https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-windows.ps1 | iex
 #
-# It installs Python, Git, ffmpeg and chromaprint if they're missing,
-# clones (or updates) yt2y1 into %USERPROFILE%\yt2y1, installs both tools,
-# walks you through the free AcoustID key, and finishes with `y1sync doctor`
-# so you can see everything is actually ready.
+# It installs winget itself if missing, then Python, Git, ffmpeg and
+# chromaprint, clones (or updates) yt2y1 into %USERPROFILE%\yt2y1, installs
+# both tools, walks you through the free AcoustID key, and finishes with
+# `y1sync doctor` so you can see everything is actually ready. ffmpeg falls
+# back to a direct download if winget's own package doesn't take.
 #
 # Safe to run more than once -- each step is skipped if it's already done.
 
@@ -28,6 +29,92 @@ function Update-SessionPath {
                 [Environment]::GetEnvironmentVariable("Path", "User")
 }
 
+function Add-ToUserPath($dir) {
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($userPath -notlike "*$dir*") {
+        [Environment]::SetEnvironmentVariable("Path", "$userPath;$dir", "User")
+    }
+}
+
+function Install-WingetBootstrap {
+    # winget ships built-in on current Windows 11 and recent Windows 10, but
+    # an older or locked-down machine can be missing it entirely. Rather
+    # than sending someone to the Microsoft Store and hoping they find their
+    # way back, this installs it the same way Microsoft's own CI images do:
+    # winget-cli's GitHub release ships the app itself plus a dependencies
+    # bundle (VCLibs / WindowsAppRuntime), sideloaded with Add-AppxPackage.
+    Write-Step "winget not found -- installing it first..."
+
+    $depsZip = Join-Path $env:TEMP "winget-deps.zip"
+    $depsDir = Join-Path $env:TEMP "winget-deps"
+    $bundlePath = Join-Path $env:TEMP "winget.msixbundle"
+
+    try {
+        Invoke-WebRequest -Uri "https://github.com/microsoft/winget-cli/releases/latest/download/DesktopAppInstaller_Dependencies.zip" -OutFile $depsZip
+        Expand-Archive -Path $depsZip -DestinationPath $depsDir -Force
+
+        $arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
+        $depFiles = Get-ChildItem -Path (Join-Path $depsDir $arch) -Filter "*.appx"
+        foreach ($dep in $depFiles) {
+            try {
+                Add-AppxPackage -Path $dep.FullName -ErrorAction Stop
+            } catch {
+                # A dependency already present at an equal or newer version
+                # makes Add-AppxPackage complain even though nothing is
+                # actually wrong -- what matters is whether the main
+                # bundle installs, checked after this loop.
+                Write-Host "  (skipping $($dep.Name): $_)" -ForegroundColor DarkGray
+            }
+        }
+
+        Invoke-WebRequest -Uri "https://github.com/microsoft/winget-cli/releases/latest/download/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle" -OutFile $bundlePath
+        Add-AppxPackage -Path $bundlePath -ErrorAction Stop
+    } catch {
+        Write-Host "Automatic winget install didn't work: $_" -ForegroundColor Yellow
+        return $false
+    } finally {
+        Remove-Item $depsZip, $bundlePath -ErrorAction SilentlyContinue
+        Remove-Item $depsDir -Recurse -ErrorAction SilentlyContinue
+    }
+
+    Update-SessionPath
+    return (Test-CommandExists "winget")
+}
+
+function Install-FfmpegDirect {
+    # Fallback used when winget itself never became available, or its
+    # ffmpeg package didn't take -- downloads the same static build the
+    # winget package wraps, directly from its publisher, and drops it
+    # alongside fpcalc rather than depending on winget at all.
+    Write-Step "Installing ffmpeg directly (without winget)..."
+    $binDir = Join-Path $env:USERPROFILE "bin"
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+
+    $zipPath = Join-Path $env:TEMP "ffmpeg.zip"
+    $extractDir = Join-Path $env:TEMP "ffmpeg-extract"
+
+    try {
+        Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $zipPath
+        Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+
+        $ffmpegExe = Get-ChildItem -Path $extractDir -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
+        if (-not $ffmpegExe) {
+            throw "ffmpeg.exe was not found inside the downloaded archive. " +
+                  "The build layout may have changed -- check https://www.gyan.dev/ffmpeg/builds/"
+        }
+        Copy-Item $ffmpegExe.FullName -Destination $binDir -Force
+
+        $ffprobeExe = Get-ChildItem -Path $extractDir -Filter "ffprobe.exe" -Recurse | Select-Object -First 1
+        if ($ffprobeExe) {
+            Copy-Item $ffprobeExe.FullName -Destination $binDir -Force
+        }
+        Add-ToUserPath $binDir
+    } finally {
+        Remove-Item $zipPath -ErrorAction SilentlyContinue
+        Remove-Item $extractDir -Recurse -ErrorAction SilentlyContinue
+    }
+}
+
 $ErrorActionPreference = "Stop"
 
 Write-Host "yt2y1 installer" -ForegroundColor Green
@@ -36,20 +123,23 @@ Write-Host ""
 
 # --- 0. winget itself -------------------------------------------------
 
-if (-not (Test-CommandExists "winget")) {
-    Write-Host "winget (the Windows Package Manager) was not found." -ForegroundColor Red
-    Write-Host "It ships with Windows 11 and recent Windows 10 updates."
-    Write-Host "Install 'App Installer' from the Microsoft Store, then run this script again:"
+$wingetAvailable = Test-CommandExists "winget"
+if (-not $wingetAvailable) {
+    $wingetAvailable = Install-WingetBootstrap
+}
+if (-not $wingetAvailable) {
+    Write-Host "winget (the Windows Package Manager) still isn't available." -ForegroundColor Red
+    Write-Host "Python and Git need it. Install 'App Installer' from the Microsoft Store" -ForegroundColor Red
+    Write-Host "yourself, then run this script again:"
     Write-Host "  https://apps.microsoft.com/detail/9nblggh4nns1"
     exit 1
 }
 
-# --- 1-3. Python, Git, ffmpeg via winget -------------------------------
+# --- 1-2. Python, Git via winget ----------------------------------------
 
 $wingetPackages = @(
     @{ Command = "python"; Id = "Python.Python.3.12"; Name = "Python 3.12" },
-    @{ Command = "git";    Id = "Git.Git";             Name = "Git" },
-    @{ Command = "ffmpeg"; Id = "Gyan.FFmpeg";          Name = "ffmpeg" }
+    @{ Command = "git";    Id = "Git.Git";             Name = "Git" }
 )
 
 foreach ($pkg in $wingetPackages) {
@@ -62,6 +152,25 @@ foreach ($pkg in $wingetPackages) {
     if ($LASTEXITCODE -ne 0) {
         throw "Installing $($pkg.Name) failed (winget exit code $LASTEXITCODE). " +
               "See the message above for what winget reported."
+    }
+}
+
+# --- 3. ffmpeg -------------------------------------------------------
+#
+# Tried via winget first, since that's the verified path; if winget's
+# ffmpeg package doesn't take for some reason, Install-FfmpegDirect below
+# gets it the same way chromaprint is fetched -- straight from the
+# publisher, no winget involved.
+
+if (Test-CommandExists "ffmpeg") {
+    Write-Step "ffmpeg already installed, skipping."
+} else {
+    Write-Step "Installing ffmpeg..."
+    winget install --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements
+    Update-SessionPath
+    if ($LASTEXITCODE -ne 0 -or -not (Test-CommandExists "ffmpeg")) {
+        Write-Host "winget's ffmpeg package didn't take -- falling back to a direct download." -ForegroundColor Yellow
+        Install-FfmpegDirect
     }
 }
 
@@ -91,11 +200,7 @@ if (Test-CommandExists "fpcalc") {
               "https://github.com/acoustid/chromaprint/releases"
     }
     Copy-Item $fpcalcExe.FullName -Destination $binDir -Force
-
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    if ($userPath -notlike "*$binDir*") {
-        [Environment]::SetEnvironmentVariable("Path", "$userPath;$binDir", "User")
-    }
+    Add-ToUserPath $binDir
 
     Remove-Item $zipPath -ErrorAction SilentlyContinue
     Remove-Item $extractDir -Recurse -ErrorAction SilentlyContinue
