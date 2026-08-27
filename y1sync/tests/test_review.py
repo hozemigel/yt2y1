@@ -64,7 +64,7 @@ def _recording(title, album, conf=0.95):
     )
 
 
-def test_a_blank_line_separates_different_recordings():
+def test_a_blank_line_precedes_a_new_recordings_group_header():
     # Found on a real track: a near-tied AcoustID match named two songs.
     # Pooled together with no marker, the true match read as one stray
     # entry among the wrong song's many releases instead of a second song.
@@ -76,18 +76,21 @@ def test_a_blank_line_separates_different_recordings():
     ]
     choose_candidate(Path("f.mp3"), options, input_fn=lambda _: "s",
                      output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
-    # One blank line, right before the "Save Tonight" entry.
-    blank_indices = [i for i, line in enumerate(lines) if line == ""]
-    save_tonight_index = next(i for i, line in enumerate(lines) if "Save Tonight" in line)
-    assert blank_indices == [save_tonight_index - 1]
+    # Group headers read "Artist — Title"; a row never contains that em dash.
+    header_index = next(i for i, line in enumerate(lines) if "Save Tonight" in line and "—" in line)
+    assert lines[header_index - 1] == ""
 
 
-def test_no_blank_line_when_every_option_is_the_same_recording():
+def test_a_single_recording_gets_exactly_one_group_header():
     lines = []
     options = [cand("Greatest Hits", secondary=("Compilation",)), cand("Rumours")]
     choose_candidate(Path("f.mp3"), options, input_fn=lambda _: "1",
                      output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
-    assert "" not in lines
+    # A group header is exactly "  Artist — Title"; other lines (like the
+    # mismatch warning here, since "X - Y" never matches "f.mp3") can
+    # contain an em dash too without being one.
+    headers = [line for line in lines if line == "  X — Y"]
+    assert len(headers) == 1
 
 
 def _kygo(title, album, secondary=(), conf=0.97):
@@ -135,3 +138,60 @@ def test_a_short_run_of_compilations_is_not_collapsed():
     choose_candidate(Path("f.mp3"), options, input_fn=lambda _: "s",
                      output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
     assert not any("more compilation" in l for l in lines)
+
+
+def test_a_group_header_names_the_artist_and_title_once():
+    # The artist and title used to repeat on every row -- the single
+    # biggest source of clutter in a list that can run to a dozen rows.
+    lines = []
+    options = [cand("Rumours"), cand("Greatest Hits", secondary=("Compilation",))]
+    choose_candidate(Path("f.mp3"), options, input_fn=lambda _: "s",
+                     output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
+    assert "  X — Y" in lines
+    # A row shows only what varies between releases -- not the repeated
+    # artist/title.
+    assert not any(line.strip().startswith("1.") and "X" in line for line in lines)
+
+
+def test_a_rows_year_and_type_are_shown_but_not_the_repeated_title():
+    lines = []
+    meta = TrackMeta(artist="Black", title="Wonderful Life", album="At Wembley Arena", year="1987")
+    single = Candidate(meta=meta, confidence=0.95, source="acoustid",
+                       release_group_type="Album", secondary_types=("Live",),
+                       release_status="Official", release_date="1987-01-01")
+    choose_candidate(Path("f.mp3"), [single], input_fn=lambda _: "s",
+                     output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
+    row = next(line for line in lines if line.strip().startswith("1."))
+    assert "1987" in row
+    assert "live" in row.lower()
+    assert "Wonderful Life" not in row  # only in the group header, above
+
+
+def test_the_header_says_one_match_for_a_single_candidate():
+    lines = []
+    choose_candidate(Path("f.mp3"), [cand("Rumours")], input_fn=lambda _: "s",
+                     output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
+    assert any("One match found for:" in line for line in lines)
+    assert not any("Multiple matches for:" in line for line in lines)
+
+
+def test_the_header_says_multiple_for_more_than_one_candidate():
+    lines = []
+    options = [cand("Rumours"), cand("Greatest Hits", secondary=("Compilation",))]
+    choose_candidate(Path("f.mp3"), options, input_fn=lambda _: "s",
+                     output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
+    assert any("Multiple matches for:" in line for line in lines)
+    assert not any("One match found for:" in line for line in lines)
+
+
+def test_a_tip_is_shown_only_when_there_is_more_than_one_option():
+    lines = []
+    choose_candidate(Path("f.mp3"), [cand("Rumours")], input_fn=lambda _: "s",
+                     output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
+    assert not any("usually the right one" in line for line in lines)
+
+    lines = []
+    options = [cand("Rumours"), cand("Greatest Hits", secondary=("Compilation",))]
+    choose_candidate(Path("f.mp3"), options, input_fn=lambda _: "s",
+                     output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
+    assert any("usually the right one" in line for line in lines)

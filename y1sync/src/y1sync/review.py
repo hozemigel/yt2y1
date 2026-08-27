@@ -33,14 +33,25 @@ def _matches_filename(title: str, stem: str) -> bool:
     return len(title_words & _title_words(stem)) / len(title_words) >= 0.5
 
 
-def _describe(candidate: Candidate) -> str:
-    parts = [f"{candidate.meta.artist} - {candidate.meta.title}"]
-    parts.append(f"[{candidate.meta.album}]")
+def _group_header(candidates: list[Candidate]) -> str:
+    """The artist and title every candidate in a group shares.
+
+    Printed once above the group instead of on every row -- repeating it
+    per row was the single biggest source of clutter in a list that can
+    run to a dozen near-identical-looking entries.
+    """
+    first = candidates[0]
+    return f"{first.meta.artist} — {first.meta.title}"
+
+
+def _row(candidate: Candidate, album_width: int) -> str:
+    """One release within a group: just the part that varies -- album, year, type."""
+    parts = [candidate.meta.album.ljust(album_width)]
     if candidate.meta.year:
-        parts.append(f"({candidate.meta.year})")
+        parts.append(candidate.meta.year)
     if candidate.secondary_types:
-        parts.append(f"<{', '.join(candidate.secondary_types)}>")
-    return " ".join(parts)
+        parts.append(f"({', '.join(t.lower() for t in candidate.secondary_types)})")
+    return "  ".join(parts).rstrip()
 
 
 def _is_derivative(candidate: Candidate) -> bool:
@@ -83,16 +94,6 @@ def choose_candidate(
         return None
 
     ranked = rank_candidates(candidates)
-    output_fn(f"\n{Path(path).name}")
-
-    stem = Path(path).stem
-    titles = {candidate.meta.title for candidate in ranked if candidate.meta.title}
-    if titles and not any(_matches_filename(title, stem) for title in titles):
-        output_fn(
-            f'  Fingerprint says this is "{ranked[0].meta.title}", which does not '
-            "match the filename. Listen to the track before choosing — the file "
-            "may be mislabeled."
-        )
 
     # Grouped by recording (ranking already keeps each one's releases
     # contiguous), with a per-group cap on how many derivative releases
@@ -100,20 +101,44 @@ def choose_candidate(
     # capped-off compilation is not a choice the user loses -- it was
     # never meaningfully different from the one or two shown for tagging
     # purposes.
+    groups = [
+        _cap_derivatives(list(group_iter))
+        for _, group_iter in groupby(ranked, key=recording_identity)
+    ]
+    total_shown = sum(len(shown) for shown, _hidden in groups)
+
+    header = "One match found for:" if total_shown == 1 else "Multiple matches for:"
+    output_fn(f"\n{header}")
+    output_fn(f"  {Path(path).name}")
+
+    stem = Path(path).stem
+    titles = {candidate.meta.title for candidate in ranked if candidate.meta.title}
+    if titles and not any(_matches_filename(title, stem) for title in titles):
+        output_fn("")
+        output_fn(
+            f'  Fingerprint says this is "{ranked[0].meta.title}", which does not '
+            "match the filename. Listen to the track before choosing — the file "
+            "may be mislabeled."
+        )
+
     displayed: list[Candidate] = []
-    for group_index, (_, group_iter) in enumerate(groupby(ranked, key=recording_identity)):
-        if group_index > 0:
-            output_fn("")
-        shown, hidden = _cap_derivatives(list(group_iter))
+    for shown, hidden in groups:
+        output_fn("")
+        output_fn(f"  {_group_header(shown)}")
+        album_width = max(len(c.meta.album) for c in shown) + 2
         for candidate in shown:
             displayed.append(candidate)
-            output_fn(f"  {len(displayed)}. {_describe(candidate)}")
+            output_fn(f"    {len(displayed)}. {_row(candidate, album_width)}")
         if hidden:
-            output_fn(f"      + {hidden} more compilation(s) of the same recording, not shown")
+            output_fn(f"       + {hidden} more compilation(s), not shown")
     ranked = displayed
 
+    if len(ranked) > 1:
+        output_fn("")
+        output_fn("Tip: option 1 is usually the right one.")
+
     while True:
-        reply = input_fn("Type a number, Enter for [1], or 's' to skip: ").strip().lower()
+        reply = input_fn("Type a number, press Enter for 1, or 's' to skip: ").strip().lower()
         if reply == "s":
             return None
         if reply == "":
