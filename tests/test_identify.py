@@ -427,3 +427,78 @@ def test_recordings_without_a_duration_still_expand(monkeypatch):
 
     found = identify(Path("x.mp3"), api_key="key", session=session)
     assert [c.meta.album for c in found] == ["Be Mine"]
+
+
+# --- Near-tied results --------------------------------------------------
+#
+# Found on a real track: AcoustID split "Eagle-Eye Cherry - Save Tonight"
+# across two results, 0.97669 and 0.97468. The true match, "Save Tonight",
+# appeared only in the second, lower-scored result alongside an unrelated
+# recording, "Are You Still Having Fun?", which topped the first result on
+# its own. Expanding only results[0] made the right recording invisible
+# to review, not merely ranked below the wrong one.
+
+NEAR_TIED_RESULTS = {"results": [
+    {"score": 0.97669435, "recordings": [
+        {"id": "rec-having-fun", "title": "Are You Still Having Fun?",
+         "artists": [{"name": "Eagle-Eye Cherry"}], "duration": 189.226},
+    ]},
+    {"score": 0.9746835, "recordings": [
+        {"id": "rec-having-fun", "title": "Are You Still Having Fun?",
+         "artists": [{"name": "Eagle-Eye Cherry"}], "duration": 189.226},
+        {"id": "rec-save-tonight", "title": "Save Tonight",
+         "artists": [{"name": "Eagle-Eye Cherry"}], "duration": 236.666},
+    ]},
+]}
+
+HAVING_FUN_RELEASE = {"releases": [{
+    "title": "Living in the Present Future", "date": "2000-01-01", "status": "Official",
+    "release-group": {"primary-type": "Album", "secondary-types": []},
+}]}
+
+SAVE_TONIGHT_RELEASE = {"releases": [{
+    "title": "Desireless", "date": "1997-01-01", "status": "Official",
+    "release-group": {"primary-type": "Album", "secondary-types": []},
+}]}
+
+
+def test_a_near_tied_second_result_is_still_expanded(monkeypatch):
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (190, "AQADtEmkRSk"))
+    session = RoutingSession({
+        ACOUSTID_ENDPOINT: NEAR_TIED_RESULTS,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-having-fun": HAVING_FUN_RELEASE,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-save-tonight": SAVE_TONIGHT_RELEASE,
+        ITUNES_ENDPOINT: SHAGGY_ITUNES,
+    })
+
+    found = identify(Path("Eagle-Eye Cherry - Save Tonight.mp3"),
+                     api_key="key", session=session)
+
+    assert "Save Tonight" in [c.meta.title for c in found]
+
+
+def test_a_result_far_below_the_top_score_is_not_expanded():
+    # Guards the other direction: a low-scoring stray result must not pull
+    # in an unrelated recording just because it happened to be returned.
+    payload = {"results": [
+        {"score": 0.97, "recordings": [
+            {"id": "rec-strong", "title": "Strong", "artists": [{"name": "A"}]},
+        ]},
+        {"score": 0.10, "recordings": [
+            {"id": "rec-weak", "title": "Weak", "artists": [{"name": "A"}]},
+        ]},
+    ]}
+
+    from y1sync.identify import _expand_acoustid
+
+    session = RoutingSession({
+        f"{MUSICBRAINZ_ENDPOINT}/rec-strong": {"releases": [{
+            "title": "Strong Album", "date": "1990-01-01", "status": "Official",
+            "release-group": {"primary-type": "Album", "secondary-types": []},
+        }]},
+    })
+
+    found = _expand_acoustid(payload, session)
+
+    assert [c.meta.title for c in found] == ["Strong"]
+    assert f"{MUSICBRAINZ_ENDPOINT}/rec-weak" not in session.calls

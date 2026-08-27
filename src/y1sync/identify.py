@@ -29,6 +29,13 @@ MAX_RECORDINGS_EXPANDED = 3
 DURATION_TOLERANCE = 8.0
 TIMEOUT = 15
 
+# How far a result's score may trail the top one and still be expanded.
+# AcoustID sometimes splits one file's true match across two results with
+# near-identical scores -- e.g. 0.9767 and 0.9747 -- each naming a
+# different recording. Looking only at the single top-scored result then
+# silently drops the right answer if it landed in the second one.
+SCORE_TOLERANCE = 0.02
+
 # Debris that YouTube rips leave in filenames.
 # The \b after each alternation is load-bearing: without it "audio"
 # matches inside "Audioslave", so "Radioactive (Audioslave Cover).mp3"
@@ -240,16 +247,30 @@ def _expand_acoustid(payload: dict, http, duration: float | None = None) -> list
     if not results:
         return []
 
-    # Results arrive best-first; the top one is the match for this audio.
-    best = results[0]
-    score = best.get("score", 0.0)
+    # Pool recordings from every result within SCORE_TOLERANCE of the best
+    # score, not just the top result, so a true match does not vanish for
+    # having landed in a near-tied second cluster. Each recording keeps the
+    # highest score it appeared under.
+    top_score = max(result.get("score", 0.0) for result in results)
+    scored: dict[str, tuple[dict, float]] = {}
+    for result in results:
+        score = result.get("score", 0.0)
+        if score < top_score - SCORE_TOLERANCE:
+            continue
+        for recording in result.get("recordings") or []:
+            recording_id = recording.get("id")
+            if not recording_id:
+                continue
+            best_so_far = scored.get(recording_id)
+            if best_so_far is None or score > best_so_far[1]:
+                scored[recording_id] = (recording, score)
 
     # AcoustID returns equally-scored recordings in no dependable order, so
     # expanding "the first three" gave a different answer run to run. Length
     # settles it: a 123-second remix is not the 156-second track on disk,
     # however well its fingerprint matches.
     recordings = sorted(
-        best.get("recordings") or [],
+        (recording for recording, _ in scored.values()),
         key=lambda r: _duration_rank(r, duration),
     )
 
@@ -264,6 +285,7 @@ def _expand_acoustid(payload: dict, http, duration: float | None = None) -> list
             time.sleep(MUSICBRAINZ_RATE_LIMIT)
         seen.add(recording_id)
         releases = musicbrainz_releases(recording_id, http)
+        score = scored[recording_id][1]
         candidates.extend(candidates_from_musicbrainz(recording, releases, score))
 
     return candidates
