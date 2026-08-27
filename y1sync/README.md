@@ -23,32 +23,58 @@ When a recording appears on several releases, y1sync ranks the original
 album above compilations and remasters, then asks you to confirm. It does
 not guess.
 
+## Requirements
+
+- **Python 3.10+**
+- **ffmpeg** and **chromaprint** (`fpcalc`) — see [Setting up fingerprinting](#setting-up-fingerprinting) below
+- A free **AcoustID application key** — same section
+- To actually copy files to the device: the Y1 connected over USB and mounted as a drive (Windows/macOS/Linux all do this automatically)
+
 ## Install
 
 Until the first PyPI release, install from source:
 
 ```bash
-pip install git+https://github.com/lukamilicevic/y1sync
+pip install ./y1sync
 ```
 
-Once published, this becomes:
+(from the root of this repo — clone it first: `git clone https://github.com/hozemigel/yt2y1 && cd yt2y1`)
+
+To also get the "Download from YouTube" option in the menu, install the
+sibling tool too:
 
 ```bash
-uv tool install y1sync    # or: pipx install y1sync
+pip install ./yt2mp3
 ```
+
+y1sync works fine without it — that menu option just explains how to
+install yt2mp3 if you pick it before it's there.
 
 ### Setting up fingerprinting
 
-Fingerprinting is what makes y1sync accurate, and it needs two things.
+Fingerprinting is what makes y1sync accurate, and it needs three things.
 
-**1. chromaprint**, which computes the fingerprint:
+**1. ffmpeg**, used to decode audio:
+
+```bash
+sudo apt install ffmpeg    # Debian, Ubuntu
+brew install ffmpeg        # macOS
+```
+
+Windows: download a build from [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+and add its `bin` folder to your PATH.
+
+**2. chromaprint**, which computes the fingerprint:
 
 ```bash
 sudo apt install libchromaprint-tools    # Debian, Ubuntu
 brew install chromaprint                 # macOS
 ```
 
-**2. An AcoustID *application* key.**
+Windows: grab the `fpcalc` build from [acoustid.org/chromaprint](https://acoustid.org/chromaprint)
+and add its folder to your PATH too.
+
+**3. An AcoustID *application* key.**
 
 AcoustID issues two different keys and it is easy to take the wrong one.
 The page at `acoustid.org/api-key`, headed *"Your API Key"*, gives a key
@@ -71,6 +97,31 @@ filename, and every track then goes through review — which is roughly
 what tagging by hand costs, so it is worth the five minutes of setup.
 
 ## Use
+
+The easiest way is to just run it with no arguments:
+
+```bash
+y1sync
+```
+
+The first time, it asks where your music folder is (offering folders it
+finds on disk as numbered choices, so you never have to type a path) and
+remembers the answer. After that you get a menu:
+
+```
+1. Download from YouTube  (then tag and send to player)
+2. Update player  (find new tracks, then send them over)
+3. Change music folder
+4. Check setup
+5. Quit
+```
+
+Option 1 needs yt2mp3 installed (see [Install](#install)); it asks for a
+YouTube URL and a bitrate, downloads, and runs the same tag-and-send flow
+as option 2 automatically.
+
+For scripting, or if you'd rather control each step yourself, the
+underlying commands still work directly:
 
 ```bash
 y1sync doctor              # check dependencies and find the device
@@ -124,6 +175,13 @@ under the right artist with their cover art showing.
 Only one Y1 and one firmware version have been tested. If yours renders
 something unexpected after a sync, that is worth an issue — include the
 firmware version.
+
+All testing so far has been on Linux. The code doesn't do anything
+Linux-specific — device detection matches the Y1's folder layout rather
+than any particular path, and file writes go through the standard
+library rather than shelling out — so it's expected to work on Windows
+and macOS too, but neither has actually been tried yet. If you're the
+first, an issue reporting how it went (either way) is genuinely useful.
 
 ## Licence
 
