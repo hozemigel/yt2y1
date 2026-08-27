@@ -1,5 +1,6 @@
 """Identify a track: by audio fingerprint first, by filename as a fallback."""
 
+import json
 import re
 import subprocess
 import time
@@ -221,7 +222,6 @@ def fingerprint(path: Path) -> tuple[int, str] | None:
         )
     except (FileNotFoundError, subprocess.SubprocessError):
         return None
-    import json
     data = json.loads(proc.stdout)
     return int(data["duration"]), data["fingerprint"]
 

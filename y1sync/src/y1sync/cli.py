@@ -85,18 +85,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("doctor", help="Report dependencies and device status")
 
-    for name, help_text in (
-        ("scan", "Identify, tag and rename MP3s in a folder"),
-        ("sync", "Copy a prepared folder to the device"),
-    ):
-        sub = subparsers.add_parser(name, help=help_text)
-        sub.add_argument("folder", help="Folder containing MP3 files")
-        sub.add_argument("--dry-run", action="store_true",
-                         help="Report what would change; write nothing")
-        sub.add_argument("--yes", action="store_true",
-                         help="Accept the top-ranked candidate without prompting")
-        sub.add_argument("--verbose", action="store_true",
-                         help="Show per-track detail including confidence scores")
+    scan = subparsers.add_parser("scan", help="Identify, tag and rename MP3s in a folder")
+    scan.add_argument("folder", help="Folder containing MP3 files")
+    scan.add_argument("--dry-run", action="store_true",
+                       help="Report what would change; write nothing")
+    scan.add_argument("--yes", action="store_true",
+                       help="Accept the top-ranked candidate without prompting")
+    scan.add_argument("--verbose", action="store_true",
+                       help="Show per-track detail including confidence scores")
+
+    # No --yes: sync never asks a question to skip in the first place --
+    # every file it decides to touch is copied outright, so accepting one
+    # here would silently do nothing, which is worse than not offering it.
+    sync = subparsers.add_parser("sync", help="Copy a prepared folder to the device")
+    sync.add_argument("folder", help="Folder containing MP3 files")
+    sync.add_argument("--dry-run", action="store_true",
+                       help="Report what would change; write nothing")
+    sync.add_argument("--verbose", action="store_true",
+                       help="Show per-track detail including confidence scores")
 
     return parser
 

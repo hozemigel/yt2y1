@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import pytest
 from y1sync.cli import build_parser, cmd_download_and_sync, cmd_menu, discover_music_folders, main
 from y1sync.config import Config, load_config, save_config
 from y1sync.models import Candidate, TrackMeta

@@ -9,6 +9,7 @@ build/
 .coverage
 htmlcov/
 
-# Default download output (see cli.py DEFAULT_OUTPUT_DIR) -- lives inside
-# this repo's working directory, but downloaded audio is not source.
+# cli.py's actual default output dir is ~/yt2mp3/pesme, outside the repo,
+# so this only guards a relative "-o pesme" run from inside a checkout --
+# downloaded audio is not source either way.
 pesme/

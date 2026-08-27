@@ -2,7 +2,6 @@
 import os
 
 import pytest
-from pathlib import Path
 from y1sync.device import (
     BACKUP_RETENTION, Y1_SIGNATURE, looks_like_y1, find_devices,
     backup_device, needs_copy, safe_copy,

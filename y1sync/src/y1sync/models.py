@@ -1,6 +1,6 @@
 """Core data structures shared across the package."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)

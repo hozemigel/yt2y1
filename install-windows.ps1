@@ -132,7 +132,11 @@ if (-not $wingetAvailable) {
     Write-Host "Python and Git need it. Install 'App Installer' from the Microsoft Store" -ForegroundColor Red
     Write-Host "yourself, then run this script again:"
     Write-Host "  https://apps.microsoft.com/detail/9nblggh4nns1"
-    exit 1
+    # Not exit: this script runs via "irm ... | iex", which executes in the
+    # *current* PowerShell session -- exit would close that whole window
+    # before the message above could be read, rather than just stopping
+    # the script. throw only unwinds this script.
+    throw "winget is not available."
 }
 
 # --- 1-2. Python, Git via winget ----------------------------------------
@@ -217,7 +221,9 @@ if ($stillMissing.Count -gt 0) {
     Write-Host "This PowerShell window may be holding onto an old PATH. Close it, open a" -ForegroundColor Yellow
     Write-Host "new PowerShell window, and run this script again -- the installs themselves" -ForegroundColor Yellow
     Write-Host "succeeded, so the second run should just pick up from here." -ForegroundColor Yellow
-    exit 1
+    # See the winget check above: throw, not exit, so this window stays
+    # open long enough for the message to actually be read.
+    throw "PATH did not pick up: $($stillMissing -join ', ')"
 }
 
 # --- 6. Clone or update yt2y1 --------------------------------------------
@@ -291,7 +297,17 @@ if ($hasKey) {
     while ([string]::IsNullOrWhiteSpace($key)) {
         $key = Read-Host "Paste your AcoustID application key here"
     }
-    [System.IO.File]::WriteAllText($configFile, "acoustid_key = `"$key`"`n")
+    # Routed through y1sync's own save_config rather than writing the file
+    # directly: WriteAllText would blank the file, discarding music_folder
+    # if "Change music folder" had already been run once. save_config()
+    # reads the existing file back first and only overwrites acoustid_key.
+    # The key travels via an environment variable, not string interpolation
+    # into the Python command, since it's pasted from a web page and may
+    # contain characters that would need careful escaping otherwise.
+    $env:Y1SYNC_ACOUSTID_KEY = $key
+    python -c "import os; from y1sync.config import Config, save_config; save_config(Config(acoustid_key=os.environ['Y1SYNC_ACOUSTID_KEY']))"
+    Remove-Item Env:\Y1SYNC_ACOUSTID_KEY
+    if ($LASTEXITCODE -ne 0) { throw "Saving the AcoustID key failed." }
     Write-Host "Saved to $configFile"
 }
 
