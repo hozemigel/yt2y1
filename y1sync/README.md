@@ -176,12 +176,13 @@ Only one Y1 and one firmware version have been tested. If yours renders
 something unexpected after a sync, that is worth an issue — include the
 firmware version.
 
-All testing so far has been on Linux. The code doesn't do anything
-Linux-specific — device detection matches the Y1's folder layout rather
-than any particular path, and file writes go through the standard
-library rather than shelling out — so it's expected to work on Windows
-and macOS too, but neither has actually been tried yet. If you're the
-first, an issue reporting how it went (either way) is genuinely useful.
+Run end-to-end on Windows as well as Linux, including a real sync to a
+device on both. macOS hasn't been tried yet, but the code doesn't do
+anything platform-specific — device detection matches the Y1's folder
+layout rather than any particular path, and file writes go through the
+standard library rather than shelling out — so it's expected to work
+there too. An issue reporting how it went (either way) is genuinely
+useful if you're the first.
 
 ## Licence
 

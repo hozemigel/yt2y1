@@ -11,7 +11,26 @@ Two small tools, each doing one job:
 you usually only ever run `y1sync`. Both still work perfectly well on
 their own.
 
+## Windows: one-line install
+
+Open PowerShell and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-windows.ps1 | iex
+```
+
+This installs Python, Git, ffmpeg and chromaprint if any are missing,
+downloads yt2y1, installs both tools, walks you through the free AcoustID
+key, and finishes by running `y1sync doctor` so you can see everything is
+actually ready. It's safe to run again if anything gets interrupted —
+already-done steps are skipped.
+
+If you'd rather see what it does before running it, the script itself is
+right here: [install-windows.ps1](install-windows.ps1).
+
 ## What you need before you start
+
+*(macOS and Linux, or if you want to install by hand on Windows too.)*
 
 | Requirement | What it's for | Get it |
 |---|---|---|
@@ -44,12 +63,13 @@ sudo apt install ffmpeg libchromaprint-tools
 # up the change.
 ```
 
-This project has only actually been run on Linux so far — the code
-itself isn't tied to it (see [y1sync's Status section](y1sync/README.md#status)
-for specifics), but if you're trying it on Windows or macOS for the
-first time, budget a little extra patience for this step in particular,
-and consider it a genuine bug report if something here doesn't work as
-described.
+Both tools have been run end-to-end on Windows and on Linux; macOS hasn't
+been tried yet but the code isn't tied to either platform (see
+[y1sync's Status section](y1sync/README.md#status) for specifics). The
+Windows install script above automates the steps that were manually
+verified working, but the automation itself is newer than those steps
+individually — if it trips on something, that's a genuine bug report,
+and the manual table above is the fallback in the meantime.
 
 ## Install
 
