@@ -45,10 +45,17 @@ def test_rejects_a_missing_path(tmp_path):
     assert looks_like_y1(tmp_path / "nope") is False
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permission bits")
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid"), reason="chmod-based permission bits are a POSIX concept"
+)
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores permission bits"
+)
 def test_rejects_a_directory_it_cannot_read(tmp_path):
     # A FAT volume the user cannot read (e.g. a root-owned /boot/efi on
-    # Linux) must be reported as "not a Y1", not crash the scan.
+    # Linux) must be reported as "not a Y1", not crash the scan. Windows
+    # has no os.geteuid() and chmod(0o000) doesn't restrict access there
+    # the same way, so this test only means anything on POSIX.
     blocked = tmp_path / "blocked"
     blocked.mkdir()
     blocked.chmod(0o000)
@@ -150,7 +157,10 @@ def test_safe_copy_leaves_no_temporary_file(tmp_path):
     src.write_bytes(b"payload")
     dst = tmp_path / "dst.mp3"
     safe_copy(src, dst)
-    assert [p.name for p in tmp_path.iterdir()] == ["src.mp3", "dst.mp3"]
+    # iterdir()'s order is filesystem-dependent -- APFS (macOS) doesn't
+    # return entries in creation order the way ext4 (Linux) happened to
+    # here, so what this test actually cares about is sorted regardless.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["dst.mp3", "src.mp3"]
 
 
 def test_safe_copy_overwrites_atomically(tmp_path):
