@@ -118,9 +118,12 @@ against an Innioasis Y1: `doctor` finds the device, `scan` tags and
 renames with cover art, `sync` backs up before writing and leaves no
 partial files behind.
 
-Not yet verified: how a given firmware renders the library screen. If
-your Y1 shows something unexpected after a sync, that is worth an issue —
-include the firmware version.
+The device's own library screen was checked too: synced tracks appear
+under the right artist with their cover art showing.
+
+Only one Y1 and one firmware version have been tested. If yours renders
+something unexpected after a sync, that is worth an issue — include the
+firmware version.
 
 ## Licence
 
