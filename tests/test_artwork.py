@@ -52,9 +52,11 @@ class FakeJsonSession:
         self.payload = payload
         self.ok = ok
         self.params = None
+        self.calls = []
 
     def get(self, url, params=None, timeout=None):
         self.params = params
+        self.calls.append(params)
         session = self
 
         class Response:
@@ -79,8 +81,55 @@ def test_looks_up_artwork_for_a_fingerprinted_track():
 def test_artwork_lookup_searches_by_artist_and_album():
     session = FakeJsonSession({"results": []})
     artwork_url_for(TrackMeta(artist="Black", title="X", album="Wonderful Life"), session)
-    assert "Black" in session.params["term"]
-    assert "Wonderful Life" in session.params["term"]
+    first_call = session.calls[0]
+    assert "Black" in first_call["term"]
+    assert "Wonderful Life" in first_call["term"]
+
+
+def test_artwork_lookup_falls_back_to_title_when_the_album_finds_nothing():
+    # Found on a real track: the ranked release was a radio promo
+    # compilation iTunes had never heard of. The song itself, searched by
+    # title alone, still has art under its real single release.
+    class SequencedSession:
+        def __init__(self, responses):
+            self.responses = list(responses)
+            self.calls = []
+
+        def get(self, url, params=None, timeout=None):
+            self.calls.append(params)
+            payload = self.responses.pop(0)
+
+            class Response:
+                ok = True
+
+                @staticmethod
+                def json():
+                    return payload
+
+            return Response()
+
+    session = SequencedSession([
+        {"results": []},
+        {"results": [{"artworkUrl100": "https://example.test/100x100bb.jpg"}]},
+    ])
+    meta = TrackMeta(artist="Eagle-Eye Cherry", title="Save Tonight",
+                      album="Promo Only: Modern Rock Radio, July 1998")
+
+    url = artwork_url_for(meta, session)
+
+    assert url.endswith("600x600bb.jpg")
+    assert len(session.calls) == 2
+    assert "Promo Only" in session.calls[0]["term"]
+    assert session.calls[1]["term"] == "Eagle-Eye Cherry Save Tonight"
+
+
+def test_artwork_lookup_does_not_fall_back_when_the_album_search_succeeds():
+    session = FakeJsonSession({"results": [
+        {"artworkUrl100": "https://example.test/100x100bb.jpg"}
+    ]})
+    meta = TrackMeta(artist="Fleetwood Mac", title="Dreams", album="Rumours")
+    artwork_url_for(meta, session)
+    assert len(session.calls) == 1
 
 
 def test_artwork_lookup_returns_none_when_nothing_matches():

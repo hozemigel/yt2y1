@@ -12,15 +12,7 @@ ITUNES_ENDPOINT = "https://itunes.apple.com/search"
 TIMEOUT = 20
 
 
-def artwork_url_for(meta: TrackMeta, session=None) -> str | None:
-    """Find a cover art URL for a track that arrived without one.
-
-    AcoustID and MusicBrainz return no artwork, so tracks identified by
-    fingerprint — the primary path — need the album looked up on iTunes
-    to get a picture.
-    """
-    http = session or requests
-    term = f"{meta.artist} {meta.album}".strip()
+def _itunes_artwork(term: str, http) -> str | None:
     if not term:
         return None
     try:
@@ -38,6 +30,26 @@ def artwork_url_for(meta: TrackMeta, session=None) -> str | None:
     except Exception:
         return None
     return url.replace("100x100bb", "600x600bb") or None
+
+
+def artwork_url_for(meta: TrackMeta, session=None) -> str | None:
+    """Find a cover art URL for a track that arrived without one.
+
+    AcoustID and MusicBrainz return no artwork, so tracks identified by
+    fingerprint — the primary path — need iTunes looked up to get a
+    picture. The chosen release's own album is tried first; when that
+    finds nothing, the recording's title is tried alone. Found on a real
+    track: ranking's only candidate was a radio promo compilation iTunes
+    had never heard of, so the album search came up empty and the file
+    was tagged with no artwork at all — searching by title alone found
+    the same song under its real single release.
+    """
+    http = session or requests
+    for term in (f"{meta.artist} {meta.album}".strip(), f"{meta.artist} {meta.title}".strip()):
+        url = _itunes_artwork(term, http)
+        if url:
+            return url
+    return None
 
 
 def fetch_artwork(url: str | None, cache_dir: Path, session=None) -> bytes | None:
