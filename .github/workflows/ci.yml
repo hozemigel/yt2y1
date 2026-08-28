@@ -26,19 +26,22 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # y1sync's tagging tests use ffmpeg to generate the silent MP3 they
-      # tag; yt2mp3's tests mock ensure_ffmpeg and don't need it installed.
-      - name: Install ffmpeg (Linux)
+      # y1sync's tagging tests use ffmpeg to generate the audio they tag,
+      # and its cache keys non-MP3 files on a chromaprint fingerprint, so
+      # fpcalc (from chromaprint) must be on PATH too or those tests fall
+      # back to a whole-file hash and fail. yt2mp3's tests mock
+      # ensure_ffmpeg and need neither installed.
+      - name: Install ffmpeg and chromaprint (Linux)
         if: matrix.package == 'y1sync' && runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libchromaprint-tools
 
-      - name: Install ffmpeg (macOS)
+      - name: Install ffmpeg and chromaprint (macOS)
         if: matrix.package == 'y1sync' && runner.os == 'macOS'
-        run: brew install ffmpeg
+        run: brew install ffmpeg chromaprint
 
-      - name: Install ffmpeg (Windows)
+      - name: Install ffmpeg and chromaprint (Windows)
         if: matrix.package == 'y1sync' && runner.os == 'Windows'
-        run: choco install ffmpeg -y
+        run: choco install ffmpeg fpcalc -y
 
       - name: Install package
         run: pip install -e ".[dev]"

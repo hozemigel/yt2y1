@@ -22,12 +22,18 @@ def silent_mp3(tmp_path):
     return path
 
 
+# ffmpeg output args per format. Ogg uses ffmpeg's own Vorbis encoder
+# rather than libvorbis: Homebrew dropped libvorbis from its default
+# ffmpeg formula, so `-c:a libvorbis` fails on macOS CI. The built-in
+# encoder needs `-strict experimental` and only does two channels, hence
+# `-ac 2` (the lavfi sine source is mono). At the 8 s default length its
+# fingerprint is byte-for-byte identical to libvorbis's.
 _CODECS = {
-    ".mp3": "libmp3lame",
-    ".wav": "pcm_s16le",
-    ".flac": "flac",
-    ".ogg": "libvorbis",
-    ".m4a": "aac",
+    ".mp3": ["-c:a", "libmp3lame"],
+    ".wav": ["-c:a", "pcm_s16le"],
+    ".flac": ["-c:a", "flac"],
+    ".ogg": ["-c:a", "vorbis", "-strict", "experimental", "-ac", "2"],
+    ".m4a": ["-c:a", "aac"],
 }
 
 
@@ -52,7 +58,7 @@ def make_audio(tmp_path):
         source = src or f"sine=frequency={freq}:duration={seconds}"
         subprocess.run(
             ["ffmpeg", "-f", "lavfi", "-i", source,
-             "-t", str(seconds), "-c:a", _CODECS[ext], "-y", str(path)],
+             "-t", str(seconds), *_CODECS[ext], "-y", str(path)],
             check=True,
             capture_output=True,
         )
