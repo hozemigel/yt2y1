@@ -44,6 +44,18 @@ def _normalize(text: str) -> str:
     return text.casefold().translate(_PUNCTUATION_VARIANTS)
 
 
+# How much a source's release data is worth, for the one case where
+# candidates from different sources meet: the no-fingerprint path, where a
+# MusicBrainz release found from the YouTube sidecar sits beside an iTunes
+# hit for the same song. iTunes reports no release type, so
+# identify.parse_itunes_response has to call everything an "Album" -- and
+# that invented type beat a real, correctly typed Single below, burying
+# the better match. Ranking by source first settles it on which data is
+# real. It reorders nothing within a source, so the fingerprint path,
+# where every candidate is "acoustid", is untouched.
+_SOURCE_RANK = {"acoustid": 0, "youtube": 1, "itunes": 2}
+
+
 def _sort_key(candidate: Candidate) -> tuple:
     is_album = candidate.release_group_type == "Album"
     is_derivative = bool(set(candidate.secondary_types) & DEPRIORITISED_TYPES)
@@ -56,6 +68,7 @@ def _sort_key(candidate: Candidate) -> tuple:
     # actually released on. Nothing derivative belongs at the top,
     # whatever its primary type says.
     return (
+        _SOURCE_RANK.get(candidate.source, len(_SOURCE_RANK)),
         is_derivative,
         not is_album,
         not is_official,

@@ -646,6 +646,7 @@ HINT_RELEASES = {"releases": [{
 def test_the_hint_drives_the_fallback_when_there_is_no_fingerprint(tmp_path, monkeypatch):
     monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: None)
     monkeypatch.setattr("y1sync.identify.MAX_RECORDINGS_EXPANDED", 1)
+    monkeypatch.setattr("y1sync.identify.time.sleep", lambda *_: None)
     mp3 = tmp_path / "snooze rip.mp3"
     mp3.write_bytes(b"x")
     _sidecar(mp3, {"artist": "SZA", "track": "Snooze", "album": "SOS", "year": "2022"})
@@ -721,3 +722,96 @@ def test_the_itunes_query_is_seeded_from_the_hint(tmp_path, monkeypatch):
     identify(mp3, session=session)
 
     assert seen["term"] == "SZA Snooze"
+
+
+def test_a_rate_limit_pause_precedes_every_release_lookup(tmp_path, monkeypatch):
+    # The recording search is itself a request to musicbrainz.org, so the
+    # release lookup that follows it is the second one within a second --
+    # exactly what MusicBrainz throttles. A 503 there is swallowed by
+    # musicbrainz_releases(), which would leave no real releases at all.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: None)
+    monkeypatch.setattr("y1sync.identify.MAX_RECORDINGS_EXPANDED", 1)
+    mp3 = tmp_path / "snooze rip.mp3"
+    mp3.write_bytes(b"x")
+    _sidecar(mp3, {"artist": "SZA", "track": "Snooze"})
+
+    session = RoutingSession({
+        MUSICBRAINZ_ENDPOINT: HINT_RECORDING_SEARCH,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-snooze": HINT_RELEASES,
+        ITUNES_ENDPOINT: {"results": []},
+    })
+    monkeypatch.setattr(
+        "y1sync.identify.time.sleep", lambda *_: session.calls.append("slept")
+    )
+
+    identify(mp3, session=session)
+
+    assert session.calls == [
+        MUSICBRAINZ_ENDPOINT,
+        "slept",
+        f"{MUSICBRAINZ_ENDPOINT}/rec-snooze",
+        ITUNES_ENDPOINT,
+    ]
+
+
+HINT_SINGLE_RELEASES = {"releases": [{
+    "title": "Snooze", "date": "2022-12-08", "status": "Official",
+    "release-group": {"primary-type": "Single", "secondary-types": []},
+}]}
+
+SNOOZE_ITUNES = {"results": [{
+    "artistName": "SZA", "trackName": "Snooze", "collectionName": "SOS",
+    "releaseDate": "2022-12-09T07:00:00Z", "primaryGenreName": "R&B/Soul",
+    "trackNumber": 8,
+}]}
+
+
+def test_a_hint_match_outranks_the_itunes_guess_it_replaces(tmp_path, monkeypatch):
+    # iTunes reports no release type, so every one of its hits is filed as
+    # an "Album" -- which used to sort a real, correctly typed Single
+    # below the guess it was meant to replace, costing the user the
+    # Enter-default and hiding the "From the YouTube page" line.
+    from y1sync.ranking import rank_candidates
+
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: None)
+    monkeypatch.setattr("y1sync.identify.MAX_RECORDINGS_EXPANDED", 1)
+    monkeypatch.setattr("y1sync.identify.time.sleep", lambda *_: None)
+    mp3 = tmp_path / "snooze rip.mp3"
+    mp3.write_bytes(b"x")
+    _sidecar(mp3, {"artist": "SZA", "track": "Snooze", "year": "2022"})
+
+    session = RoutingSession({
+        MUSICBRAINZ_ENDPOINT: HINT_RECORDING_SEARCH,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-snooze": HINT_SINGLE_RELEASES,
+        ITUNES_ENDPOINT: SNOOZE_ITUNES,
+    })
+
+    ranked = rank_candidates(identify(mp3, session=session))
+
+    sources = [c.source for c in ranked]
+    assert "itunes" in sources and "youtube" in sources
+    assert sources[0] == "youtube"
+    # Every hint-derived candidate ranks above every iTunes guess.
+    assert max(i for i, s in enumerate(sources) if s == "youtube") < sources.index("itunes")
+    albums = [c.meta.album for c in ranked]
+    assert albums.index("Snooze") < albums.index("SOS")
+    assert all(c.source != "acoustid" for c in ranked)
+
+
+def test_an_artist_only_hint_synthesizes_nothing(tmp_path, monkeypatch):
+    # A sidecar naming only the artist is enough to search on but not
+    # enough to tag with: synthesizing from it yields an empty title.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: None)
+    mp3 = tmp_path / "mystery.mp3"
+    mp3.write_bytes(b"x")
+    _sidecar(mp3, {"artist": "Some DIY Act"})
+
+    session = RoutingSession({
+        MUSICBRAINZ_ENDPOINT: {"recordings": []},
+        ITUNES_ENDPOINT: {"results": []},
+    })
+
+    found = identify(mp3, session=session)
+
+    assert MUSICBRAINZ_ENDPOINT in session.calls  # the search still runs
+    assert [c for c in found if c.source == "youtube"] == []

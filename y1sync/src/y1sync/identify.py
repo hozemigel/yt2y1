@@ -35,6 +35,16 @@ MUSICBRAINZ_RATE_LIMIT = 1.1
 # are usually the same recording on yet another release.
 MAX_RECORDINGS_EXPANDED = 3
 
+# Confidence for the candidates the YouTube sidecar produces. Not a
+# measure of anything -- nothing has looked at the audio -- but a token
+# figure that keeps them above the confidence-less iTunes guesses they
+# exist to replace. It is safely below any auto-apply threshold, and
+# ranking.decide() refuses to apply a non-"acoustid" source at all, so no
+# value here can make a guess self-applying. The synthesized candidate
+# sits below a real MusicBrainz release found by the same search.
+HINT_CONFIDENCE = 0.1
+SYNTHETIC_CONFIDENCE = 0.05
+
 # How far a recording's stated length may sit from the file's before it is
 # treated as different audio. Pressings of one recording differ by a second
 # or two; an edit or a remix differs by far more.
@@ -429,7 +439,7 @@ def _synthetic_candidate(hint: YtHint) -> Candidate:
             album=hint.album or "",
             year=hint.year,
         ),
-        confidence=0.0,
+        confidence=SYNTHETIC_CONFIDENCE,
         source="youtube",
         release_group_type="Album",
         release_status="Official",
@@ -455,14 +465,24 @@ def _fallback(path: Path, http) -> list[Candidate]:
         recordings = musicbrainz_recording_search(
             hint.artist or "", hint.track or "", hint.album, http
         )
-        for index, recording in enumerate(recordings[:MAX_RECORDINGS_EXPANDED]):
-            if index:
-                time.sleep(MUSICBRAINZ_RATE_LIMIT)
+        for recording in recordings[:MAX_RECORDINGS_EXPANDED]:
+            # Unconditionally, unlike the fingerprint path: the search
+            # above already hit musicbrainz.org, so even the first release
+            # lookup here is a second request to a host that throttles
+            # anonymous clients to one per second. Without the pause it
+            # comes back 503, musicbrainz_releases() swallows that, and
+            # every real release quietly disappears.
+            time.sleep(MUSICBRAINZ_RATE_LIMIT)
             releases = musicbrainz_releases(recording["id"], http)
             candidates.extend(
-                candidates_from_musicbrainz(recording, releases, 0.0, source="youtube")
+                candidates_from_musicbrainz(
+                    recording, releases, HINT_CONFIDENCE, source="youtube"
+                )
             )
-        candidates.append(_synthetic_candidate(hint))
+        # An artist-only sidecar has nothing taggable to synthesize from:
+        # the candidate would carry an empty title.
+        if hint.track or hint.video_title:
+            candidates.append(_synthetic_candidate(hint))
         itunes_term = " ".join(term for term in (hint.artist, hint.track) if term)
 
     if not itunes_term:
