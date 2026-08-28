@@ -6,6 +6,36 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-28
+
+### Added
+- **A track the fingerprint can't place is now identified from what
+  YouTube said it was, not just its filename.** `yt2mp3` writes a small
+  `<name>.yt2mp3.json` beside each download holding the artist, title,
+  album and year yt-dlp pulled from the video (a YouTube Music "- Topic"
+  channel, or the "Provided to YouTube by" block in the description).
+  When AcoustID returns no match — common for lesser-known and
+  independent tracks — `y1sync` uses that to text-search MusicBrainz for
+  the real release and to seed the iTunes lookup, instead of guessing
+  from a noisy filename. The result still goes to review and `--yes`
+  still refuses it: nothing but a fingerprint is applied unseen. No
+  sidecar (a hand-managed library, or a file downloaded another way)
+  means the old filename behaviour, unchanged.
+- **The installers now set up deno**, a JS runtime yt-dlp uses for
+  reliable YouTube extraction. Without one, downloads fall back to a
+  slower, more failure-prone path — seen for real as repeated read
+  timeouts fetching YouTube's player API and a download that cuts off
+  partway through. Not a hard requirement — YouTube downloads still work
+  without it, just less reliably — so `y1sync doctor` reports it as
+  recommended rather than blocking readiness on it.
+- yt2mp3's downloads are more resilient to a slow or flaky connection:
+  yt-dlp's socket timeout and retry counts are both raised.
+- **A "Check for updates" menu option.** Fetches the cloned repo, reports
+  how many commits behind origin it is, and offers to pull and reinstall
+  both tools in place. Works with the standard install (see the
+  installers above); a checkout in a different location is told so
+  rather than guessed at.
+
 ### Fixed
 - **Cover art lookup no longer matches an unrelated same-named artist
   when the album is unknown.** Searching iTunes for just an artist's name
@@ -48,34 +78,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 - **Ctrl+C during a review prompt no longer dumps a traceback.** It's now
   caught cleanly and prints "Cancelled."
 
-### Added
-- **A track the fingerprint can't place is now identified from what
-  YouTube said it was, not just its filename.** `yt2mp3` writes a small
-  `<name>.yt2mp3.json` beside each download holding the artist, title,
-  album and year yt-dlp pulled from the video (a YouTube Music "- Topic"
-  channel, or the "Provided to YouTube by" block in the description).
-  When AcoustID returns no match — common for lesser-known and
-  independent tracks — `y1sync` uses that to text-search MusicBrainz for
-  the real release and to seed the iTunes lookup, instead of guessing
-  from a noisy filename. The result still goes to review and `--yes`
-  still refuses it: nothing but a fingerprint is applied unseen. No
-  sidecar (a hand-managed library, or a file downloaded another way)
-  means the old filename behaviour, unchanged.
-- **The installers now set up deno**, a JS runtime yt-dlp uses for
-  reliable YouTube extraction. Without one, downloads fall back to a
-  slower, more failure-prone path — seen for real as repeated read
-  timeouts fetching YouTube's player API and a download that cuts off
-  partway through. Not a hard requirement — YouTube downloads still work
-  without it, just less reliably — so `y1sync doctor` reports it as
-  recommended rather than blocking readiness on it.
-- yt2mp3's downloads are more resilient to a slow or flaky connection:
-  yt-dlp's socket timeout and retry counts are both raised.
-- **A "Check for updates" menu option.** Fetches the cloned repo, reports
-  how many commits behind origin it is, and offers to pull and reinstall
-  both tools in place. Works with the standard install (see the
-  installers above); a checkout in a different location is told so
-  rather than guessed at.
-
 ## [0.1.0] - 2026-08-28
 
 Initial tagged release. Both tools have been run end to end against the real
@@ -114,4 +116,6 @@ AcoustID and MusicBrainz services and against an Innioasis Y1.
   these the same way it refuses filename-only guesses. Matches with no length
   information on either side are unaffected.
 
+[Unreleased]: https://github.com/hozemigel/yt2y1/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/hozemigel/yt2y1/releases/tag/v0.2.0
 [0.1.0]: https://github.com/hozemigel/yt2y1/releases/tag/v0.1.0
