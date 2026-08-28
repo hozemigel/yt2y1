@@ -2,6 +2,7 @@
 """Cover art download, cached on disk by URL."""
 
 import hashlib
+import re
 from pathlib import Path
 
 import requests
@@ -10,6 +11,15 @@ from .models import TrackMeta
 
 ITUNES_ENDPOINT = "https://itunes.apple.com/search"
 TIMEOUT = 20
+
+# A trailing qualifier like "(Radio Edit)", "(House Remix)" or "(Live
+# Session)" describes a specific version, not a distinct release with its
+# own iTunes listing -- searching with it still attached usually finds
+# nothing, even though the underlying song has an official cover on file.
+# Only the *trailing* parenthetical is stripped: a title genuinely
+# containing "(...)" earlier on (a subtitle, a featured artist) is left
+# alone rather than mangled on the guess that it's the same kind of noise.
+TRAILING_QUALIFIER = re.compile(r"\s*\([^()]*\)\s*$")
 
 
 def _itunes_artwork(term: str, http) -> str | None:
@@ -37,15 +47,35 @@ def artwork_url_for(meta: TrackMeta, session=None) -> str | None:
 
     AcoustID and MusicBrainz return no artwork, so tracks identified by
     fingerprint — the primary path — need iTunes looked up to get a
-    picture. The chosen release's own album is tried first; when that
-    finds nothing, the recording's title is tried alone. Found on a real
-    track: ranking's only candidate was a radio promo compilation iTunes
-    had never heard of, so the album search came up empty and the file
-    was tagged with no artwork at all — searching by title alone found
-    the same song under its real single release.
+    picture. Tried in order, each one only when the previous finds
+    nothing:
+
+    1. artist + album -- skipped when there is no album, rather than
+       searching on the artist's name alone. Found on a real track with
+       no album: "Electric Youth" by itself matched Debbie Gibson's 1989
+       album of the same name -- an unrelated artist with an unrelated
+       cover, nothing to do with the actual track.
+    2. artist + title. Found on a real track: ranking's only candidate
+       was a radio promo compilation iTunes had never heard of, so the
+       album search came up empty and the file was tagged with no
+       artwork at all — searching by title alone found the same song
+       under its real single release.
+    3. artist + title with a trailing qualifier stripped -- "(Radio
+       Edit)", "(House Remix)", "(Live Session)" and the like describe a
+       specific version, not a release with its own iTunes listing, so
+       searching with one still attached usually finds nothing even
+       though the underlying song has an official cover on file.
     """
     http = session or requests
-    for term in (f"{meta.artist} {meta.album}".strip(), f"{meta.artist} {meta.title}".strip()):
+    terms = []
+    if meta.album:
+        terms.append(f"{meta.artist} {meta.album}".strip())
+    if meta.title:
+        terms.append(f"{meta.artist} {meta.title}".strip())
+        stripped_title = TRAILING_QUALIFIER.sub("", meta.title).strip()
+        if stripped_title and stripped_title != meta.title:
+            terms.append(f"{meta.artist} {stripped_title}".strip())
+    for term in terms:
         url = _itunes_artwork(term, http)
         if url:
             return url

@@ -7,6 +7,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 ## [Unreleased]
 
 ### Fixed
+- **Cover art lookup no longer matches an unrelated same-named artist
+  when the album is unknown.** Searching iTunes for just an artist's name
+  — the fallback when no album is known — matched whatever album ranked
+  top for that name, regardless of whether it was the right artist.
+  Found for real: "Electric Youth" with no album came back with Debbie
+  Gibson's 1989 album of the same name, nothing to do with the actual
+  track. That search term is no longer tried at all when there's no
+  album; artist + title is tried first instead.
+- **Cover art lookup also now tries the title with a trailing qualifier
+  stripped.** "(Radio Edit)", "(House Remix)", "(Live Session)" and
+  similar describe a specific version, not a release with its own iTunes
+  listing — searching with one still attached often finds nothing even
+  though the underlying song has an official cover on file. Tried last,
+  after the exact title.
 - **A copy that silently landed as a 0-byte file is now a loud, retriable
   failure instead of a false "Copied."** Found for real on a Y1, plugged
   in and untouched throughout: a track's copy raised no error and was

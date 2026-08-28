@@ -123,6 +123,68 @@ def test_artwork_lookup_falls_back_to_title_when_the_album_finds_nothing():
     assert session.calls[1]["term"] == "Eagle-Eye Cherry Save Tonight"
 
 
+def test_artwork_lookup_skips_the_bare_artist_search_when_there_is_no_album():
+    # Regression test: found for real with no album known, searching on
+    # the artist's name alone ("Electric Youth") matched an unrelated
+    # Debbie Gibson album of the same name -- not the actual track at all.
+    session = FakeJsonSession({"results": [
+        {"artworkUrl100": "https://example.test/100x100bb.jpg"}
+    ]})
+    meta = TrackMeta(artist="Electric Youth", title="A Real Hero", album="")
+
+    artwork_url_for(meta, session)
+
+    assert len(session.calls) == 1
+    assert session.calls[0]["term"] == "Electric Youth A Real Hero"
+
+
+def test_artwork_lookup_falls_back_to_a_stripped_qualifier_in_the_title():
+    # Regression test: "A Real Hero (SC Live Session)" found nothing --
+    # that release doesn't exist on iTunes under that exact title -- even
+    # though the underlying song, "A Real Hero", has an official cover.
+    class SequencedSession:
+        def __init__(self, responses):
+            self.responses = list(responses)
+            self.calls = []
+
+        def get(self, url, params=None, timeout=None):
+            self.calls.append(params)
+            payload = self.responses.pop(0)
+
+            class Response:
+                ok = True
+
+                @staticmethod
+                def json():
+                    return payload
+
+            return Response()
+
+    session = SequencedSession([
+        {"results": []},
+        {"results": [{"artworkUrl100": "https://example.test/100x100bb.jpg"}]},
+    ])
+    meta = TrackMeta(artist="Electric Youth", title="A Real Hero (SC Live Session)", album="")
+
+    url = artwork_url_for(meta, session)
+
+    assert url.endswith("600x600bb.jpg")
+    assert len(session.calls) == 2
+    assert session.calls[0]["term"] == "Electric Youth A Real Hero (SC Live Session)"
+    assert session.calls[1]["term"] == "Electric Youth A Real Hero"
+
+
+def test_artwork_lookup_does_not_repeat_the_title_search_without_a_qualifier():
+    # A title with no trailing "(...)" has nothing to strip -- the third,
+    # broader term must not be tried as a pointless duplicate of the second.
+    session = FakeJsonSession({"results": []})
+    meta = TrackMeta(artist="Fleetwood Mac", title="Dreams", album="")
+
+    artwork_url_for(meta, session)
+
+    assert len(session.calls) == 1
+
+
 def test_artwork_lookup_does_not_fall_back_when_the_album_search_succeeds():
     session = FakeJsonSession({"results": [
         {"artworkUrl100": "https://example.test/100x100bb.jpg"}
