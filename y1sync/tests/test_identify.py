@@ -2,7 +2,8 @@ from pathlib import Path
 import pytest
 from y1sync.identify import (
     ACOUSTID_ENDPOINT, BUNDLED_ACOUSTID_KEY, ITUNES_ENDPOINT, MUSICBRAINZ_ENDPOINT,
-    AcoustIDKeyRejected, acoustid_key, guess_query_from_filename, identify,
+    AcoustIDKeyRejected, acoustid_key, candidates_from_musicbrainz,
+    guess_query_from_filename, identify, musicbrainz_recording_search,
     parse_itunes_response, parse_acoustid_response,
 )
 
@@ -538,3 +539,85 @@ def test_a_result_far_below_the_top_score_is_not_expanded():
 
     assert [c.meta.title for c in found] == ["Strong"]
     assert f"{MUSICBRAINZ_ENDPOINT}/rec-weak" not in session.calls
+
+
+def test_candidates_from_musicbrainz_can_be_marked_a_non_fingerprint_source():
+    from y1sync.identify import candidates_from_musicbrainz
+
+    recording = {"title": "Snooze", "artists": [{"name": "SZA"}], "duration": 202.0}
+    releases = [{
+        "title": "SOS", "date": "2022-12-09", "status": "Official",
+        "release-group": {"primary-type": "Album", "secondary-types": []},
+    }]
+    cands = candidates_from_musicbrainz(recording, releases, 0.0, source="youtube")
+    assert cands and all(c.source == "youtube" for c in cands)
+    assert cands[0].meta.album == "SOS"
+    # Default is unchanged.
+    assert candidates_from_musicbrainz(recording, releases, 0.9)[0].source == "acoustid"
+
+
+def test_recording_search_builds_a_lucene_query_and_normalises_results():
+    from y1sync.identify import MUSICBRAINZ_ENDPOINT, musicbrainz_recording_search
+
+    captured = {}
+
+    class SpySession:
+        ok = True
+
+        def get(self, url, params=None, timeout=None, headers=None):
+            captured["url"] = url
+            captured["params"] = params
+            captured["headers"] = headers
+            session = self
+
+            class Response:
+                ok = True
+
+                @staticmethod
+                def json():
+                    return {"recordings": [{
+                        "id": "rec-1", "title": "Snooze", "length": 202000,
+                        "artist-credit": [{"name": "SZA"}],
+                    }, {
+                        "id": None, "title": "dropped", "artist-credit": [],
+                    }]}
+
+            return Response()
+
+    out = musicbrainz_recording_search("SZA", "Snooze", "SOS", SpySession())
+
+    assert captured["url"] == MUSICBRAINZ_ENDPOINT
+    assert captured["params"]["fmt"] == "json"
+    query = captured["params"]["query"]
+    assert 'recording:"Snooze"' in query
+    assert 'artist:"SZA"' in query
+    assert 'release:"SOS"' in query
+    assert "User-Agent" in captured["headers"]
+    # Normalised to the AcoustID recording shape; the row with no id is gone.
+    assert out == [{
+        "id": "rec-1", "title": "Snooze",
+        "artists": [{"name": "SZA"}], "duration": 202.0,
+    }]
+
+
+def test_recording_search_returns_empty_on_a_failed_request():
+    from y1sync.identify import musicbrainz_recording_search
+
+    class DownSession:
+        def get(self, url, params=None, timeout=None, headers=None):
+            class Response:
+                ok = False
+
+                @staticmethod
+                def json():
+                    return {}
+
+            return Response()
+
+    assert musicbrainz_recording_search("A", "B", None, DownSession()) == []
+
+
+def test_recording_search_needs_at_least_one_term():
+    from y1sync.identify import musicbrainz_recording_search
+
+    assert musicbrainz_recording_search("", "", None, object()) == []

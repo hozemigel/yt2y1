@@ -202,10 +202,75 @@ def musicbrainz_releases(recording_id: str, session=None) -> list[dict]:
         return []
 
 
+def _lucene_escape(text: str) -> str:
+    """Neutralise the Lucene metacharacters a title or artist name carries."""
+    return re.sub(r'(["\\])', r"\\\1", text)
+
+
+def musicbrainz_recording_search(
+    artist: str, track: str, album: str | None = None, session=None
+) -> list[dict]:
+    """Text-search MusicBrainz recordings, seeded from the YouTube sidecar.
+
+    Used only on the no-fingerprint path. The result is normalised to the
+    same shape an AcoustID hit's recording dict has -- ``artists`` a list
+    of ``{"name": ...}``, ``duration`` in seconds -- so it can go straight
+    into musicbrainz_releases() + candidates_from_musicbrainz(). Any
+    failure yields [] and identify() falls through to its iTunes guess.
+    """
+    http = session or requests
+    terms = []
+    if track:
+        terms.append(f'recording:"{_lucene_escape(track)}"')
+    if artist:
+        terms.append(f'artist:"{_lucene_escape(artist)}"')
+    if album:
+        terms.append(f'release:"{_lucene_escape(album)}"')
+    if not terms:
+        return []
+
+    try:
+        response = http.get(
+            MUSICBRAINZ_ENDPOINT,
+            params={"query": " AND ".join(terms), "fmt": "json", "limit": 5},
+            headers={"User-Agent": MUSICBRAINZ_USER_AGENT},
+            timeout=TIMEOUT,
+        )
+    except Exception:
+        return []
+    if not getattr(response, "ok", False):
+        return []
+    try:
+        found = response.json().get("recordings") or []
+    except ValueError:
+        return []
+
+    normalised = []
+    for rec in found:
+        credit = rec.get("artist-credit") or []
+        name = ""
+        if credit:
+            name = credit[0].get("name") or (credit[0].get("artist") or {}).get("name", "")
+        length = rec.get("length")
+        normalised.append({
+            "id": rec.get("id"),
+            "title": rec.get("title", ""),
+            "artists": [{"name": name}],
+            "duration": length / 1000.0 if isinstance(length, (int, float)) else None,
+        })
+    return [rec for rec in normalised if rec["id"]]
+
+
 def candidates_from_musicbrainz(
-    recording: dict, releases: list[dict], score: float
+    recording: dict, releases: list[dict], score: float, source: str = "acoustid"
 ) -> list[Candidate]:
-    """Build one candidate per release of a recording."""
+    """Build one candidate per release of a recording.
+
+    ``source`` is "acoustid" for the fingerprint path and "youtube" when
+    the recording came from a text search seeded by the YouTube sidecar;
+    it must never be "acoustid" for the latter, or a guess would be
+    eligible for automatic tagging.
+    """
     artists = recording.get("artists") or [{}]
     artist = artists[0].get("name", "")
     title = recording.get("title", "")
@@ -226,7 +291,7 @@ def candidates_from_musicbrainz(
                 year=date[:4] or None,
             ),
             confidence=score,
-            source="acoustid",
+            source=source,
             release_group_type=group.get("primary-type"),
             secondary_types=tuple(group.get("secondary-types") or ()),
             release_status=release.get("status"),
