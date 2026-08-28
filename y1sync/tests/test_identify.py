@@ -1,3 +1,4 @@
+import json as _json
 from pathlib import Path
 import pytest
 from y1sync.identify import (
@@ -621,3 +622,102 @@ def test_recording_search_needs_at_least_one_term():
     from y1sync.identify import musicbrainz_recording_search
 
     assert musicbrainz_recording_search("", "", None, object()) == []
+
+
+# --- Hint-aware fallback ---------------------------------------------------
+
+
+def _sidecar(mp3, body):
+    mp3.with_name(mp3.stem + ".yt2mp3.json").write_text(
+        _json.dumps(body), encoding="utf-8"
+    )
+
+
+HINT_RECORDING_SEARCH = {"recordings": [
+    {"id": "rec-snooze", "title": "Snooze", "length": 202000,
+     "artist-credit": [{"name": "SZA"}]},
+]}
+HINT_RELEASES = {"releases": [{
+    "title": "SOS", "date": "2022-12-09", "status": "Official",
+    "release-group": {"primary-type": "Album", "secondary-types": []},
+}]}
+
+
+def test_the_hint_drives_the_fallback_when_there_is_no_fingerprint(tmp_path, monkeypatch):
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: None)
+    monkeypatch.setattr("y1sync.identify.MAX_RECORDINGS_EXPANDED", 1)
+    mp3 = tmp_path / "snooze rip.mp3"
+    mp3.write_bytes(b"x")
+    _sidecar(mp3, {"artist": "SZA", "track": "Snooze", "album": "SOS", "year": "2022"})
+
+    session = RoutingSession({
+        MUSICBRAINZ_ENDPOINT: HINT_RECORDING_SEARCH,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-snooze": HINT_RELEASES,
+        ITUNES_ENDPOINT: {"results": []},
+    })
+
+    found = identify(mp3, session=session)
+
+    assert MUSICBRAINZ_ENDPOINT in session.calls           # search was run
+    assert f"{MUSICBRAINZ_ENDPOINT}/rec-snooze" in session.calls
+    assert any(c.meta.album == "SOS" and c.source == "youtube" for c in found)
+    assert all(c.source != "acoustid" for c in found)
+
+
+def test_a_synthesized_candidate_survives_when_musicbrainz_has_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: None)
+    mp3 = tmp_path / "obscure.mp3"
+    mp3.write_bytes(b"x")
+    _sidecar(mp3, {"artist": "Some DIY Act", "track": "Basement Tape", "year": "2013"})
+
+    session = RoutingSession({
+        MUSICBRAINZ_ENDPOINT: {"recordings": []},
+        ITUNES_ENDPOINT: {"results": []},
+    })
+
+    found = identify(mp3, session=session)
+
+    synth = [c for c in found if c.source == "youtube"]
+    assert len(synth) == 1
+    assert synth[0].meta.artist == "Some DIY Act"
+    assert synth[0].meta.title == "Basement Tape"
+    assert synth[0].meta.year == "2013"
+    assert synth[0].release_date is None
+
+
+def test_no_sidecar_keeps_the_filename_path_exactly(tmp_path, monkeypatch):
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: None)
+    mp3 = tmp_path / "Shaggy - Angel.mp3"
+    mp3.write_bytes(b"x")
+
+    session = RoutingSession({ITUNES_ENDPOINT: SHAGGY_ITUNES})
+
+    found = identify(mp3, session=session)
+
+    assert MUSICBRAINZ_ENDPOINT not in session.calls
+    assert session.calls == [ITUNES_ENDPOINT]
+    assert [c.source for c in found] == ["itunes"]
+
+
+def test_the_itunes_query_is_seeded_from_the_hint(tmp_path, monkeypatch):
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: None)
+    mp3 = tmp_path / "whatever noise (Official Audio).mp3"
+    mp3.write_bytes(b"x")
+    _sidecar(mp3, {"artist": "SZA", "track": "Snooze"})
+
+    seen = {}
+
+    class ParamSpy(RoutingSession):
+        def get(self, url, params=None, timeout=None, headers=None):
+            if url == ITUNES_ENDPOINT:
+                seen["term"] = params["term"]
+            return super().get(url, params, timeout, headers)
+
+    session = ParamSpy({
+        MUSICBRAINZ_ENDPOINT: {"recordings": []},
+        ITUNES_ENDPOINT: {"results": []},
+    })
+
+    identify(mp3, session=session)
+
+    assert seen["term"] == "SZA Snooze"

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import requests
 
+from .hint import YtHint, load_hint
 from .models import Candidate, TrackMeta
 
 ITUNES_ENDPOINT = "https://itunes.apple.com/search"
@@ -412,9 +413,68 @@ def identify(path: Path, api_key: str | None = None, session=None) -> list[Candi
                 except ValueError:
                     pass
 
-    response = http.get(ITUNES_ENDPOINT, params={
-        "term": guess_query_from_filename(path), "entity": "song", "limit": 5,
-    }, timeout=TIMEOUT)
-    if not response.ok:
-        return []
-    return parse_itunes_response(response.json())
+    return _fallback(path, http)
+
+
+def _synthetic_candidate(hint: YtHint) -> Candidate:
+    """A candidate built straight from the sidecar -- the answer when
+    MusicBrainz has nothing catalogued for an obscure track. release_date
+    is left None so any real dated release ranks above it, and the source
+    is "youtube" so it is always routed through review.
+    """
+    return Candidate(
+        meta=TrackMeta(
+            artist=hint.artist or "",
+            title=hint.track or hint.video_title or "",
+            album=hint.album or "",
+            year=hint.year,
+        ),
+        confidence=0.0,
+        source="youtube",
+        release_group_type="Album",
+        release_status="Official",
+        release_date=None,
+    )
+
+
+def _fallback(path: Path, http) -> list[Candidate]:
+    """Identify without a fingerprint.
+
+    From the YouTube sidecar when one sits beside the file -- a
+    MusicBrainz text search for real releases, plus a candidate
+    synthesized straight from the sidecar, plus the existing iTunes
+    search seeded with the sidecar's artist and title. From the filename
+    otherwise, exactly as before. Nothing here is source "acoustid", so
+    every result goes through review.
+    """
+    hint = load_hint(path)
+    candidates: list[Candidate] = []
+    itunes_term = ""
+
+    if hint is not None:
+        recordings = musicbrainz_recording_search(
+            hint.artist or "", hint.track or "", hint.album, http
+        )
+        for index, recording in enumerate(recordings[:MAX_RECORDINGS_EXPANDED]):
+            if index:
+                time.sleep(MUSICBRAINZ_RATE_LIMIT)
+            releases = musicbrainz_releases(recording["id"], http)
+            candidates.extend(
+                candidates_from_musicbrainz(recording, releases, 0.0, source="youtube")
+            )
+        candidates.append(_synthetic_candidate(hint))
+        itunes_term = " ".join(term for term in (hint.artist, hint.track) if term)
+
+    if not itunes_term:
+        itunes_term = guess_query_from_filename(path)
+
+    try:
+        response = http.get(ITUNES_ENDPOINT, params={
+            "term": itunes_term, "entity": "song", "limit": 5,
+        }, timeout=TIMEOUT)
+        if getattr(response, "ok", False):
+            candidates.extend(parse_itunes_response(response.json()))
+    except Exception:
+        pass
+
+    return candidates
