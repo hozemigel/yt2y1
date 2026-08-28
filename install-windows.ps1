@@ -4,8 +4,9 @@
 #
 #   irm https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-windows.ps1 | iex
 #
-# It installs winget itself if missing, then Python, Git, ffmpeg and
-# chromaprint, clones (or updates) yt2y1 into %USERPROFILE%\yt2y1, installs
+# It installs winget itself if missing, then Python, Git, ffmpeg,
+# chromaprint and deno (a JS runtime yt-dlp uses for reliable YouTube
+# downloads), clones (or updates) yt2y1 into %USERPROFILE%\yt2y1, installs
 # both tools, and finishes with `y1sync doctor` so you can see everything
 # is actually ready. Audio fingerprinting needs no key or signup: y1sync
 # ships with its own AcoustID lookup key. ffmpeg falls back to a direct
@@ -209,6 +210,31 @@ if (Test-CommandExists "fpcalc") {
 
     Remove-Item $zipPath -ErrorAction SilentlyContinue
     Remove-Item $extractDir -Recurse -ErrorAction SilentlyContinue
+}
+
+# --- 4b. deno (JS runtime for reliable YouTube downloads) ---------------
+#
+# Not required the way Python/Git/ffmpeg/chromaprint above are -- the
+# "still missing" check below and y1sync's own readiness check don't
+# depend on it, and yt2mp3 still works without it. But yt-dlp's YouTube
+# extraction is markedly less reliable without a JS runtime present
+# (more timeouts, occasional failed downloads). Best-effort: caught and
+# reported rather than aborting the whole install the way a failed
+# ffmpeg or chromaprint step does.
+
+if (Test-CommandExists "deno") {
+    Write-Step "deno already installed, skipping."
+} else {
+    Write-Step "Installing deno..."
+    try {
+        winget install --id DenoLand.Deno -e --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) { throw "winget exit code $LASTEXITCODE" }
+        Update-SessionPath
+    } catch {
+        Write-Host "Could not install deno automatically: $_" -ForegroundColor Yellow
+        Write-Host "YouTube downloads will still work, just less reliably. See" -ForegroundColor Yellow
+        Write-Host "https://docs.deno.com/runtime/getting_started/installation/" -ForegroundColor Yellow
+    }
 }
 
 # --- 5. Confirm everything is actually on PATH now ----------------------

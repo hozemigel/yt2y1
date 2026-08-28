@@ -116,6 +116,12 @@ def cmd_doctor() -> int:
     fpcalc_found = shutil.which("fpcalc")
     devices = find_devices()
     device = devices[0] if devices else None
+    # yt-dlp now needs a JS runtime to extract YouTube reliably -- without
+    # one it falls back to a slower, more failure-prone path (repeated
+    # timeouts, truncated downloads). Not a hard prerequisite the way
+    # ffmpeg/chromaprint are, since downloads work without it; left out of
+    # `ready` below for the same reason the Y1 connection is.
+    deno_found = shutil.which("deno")
 
     # (label, present, hint shown only when missing)
     #
@@ -129,6 +135,8 @@ def cmd_doctor() -> int:
          "needed for accurate song matching -- see the README"),
         ("Y1 player", bool(device),
          "not connected"),
+        ("JS runtime (deno)", bool(deno_found),
+         "recommended for reliable YouTube downloads -- see the README"),
     ]
 
     print("Checking setup...\n")

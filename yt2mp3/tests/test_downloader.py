@@ -9,6 +9,9 @@ def test_build_ydl_opts_defaults():
     assert d["format"] == "bestaudio/best"
     assert d["outtmpl"] == os.path.join(".", "%(title)s.%(ext)s")
     assert d["ignoreerrors"] is True
+    assert d["socket_timeout"] == 30
+    assert d["retries"] == 20
+    assert d["fragment_retries"] == 20
     pp = d["postprocessors"][0]
     assert pp["key"] == "FFmpegExtractAudio"
     assert pp["preferredcodec"] == "mp3"

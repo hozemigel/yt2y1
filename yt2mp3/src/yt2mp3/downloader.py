@@ -57,6 +57,16 @@ def build_ydl_opts(opts: DownloadOptions) -> dict:
         "postprocessor_hooks": [_postprocessor_hook],
         "ignoreerrors": True,
         "noplaylist": not opts.playlist,
+        # yt-dlp's defaults -- a 20s socket timeout, 10 retries -- are
+        # tuned for a typical connection. Seen for real on a slower one:
+        # repeated "Read timed out (read timeout=20.0)" fetching YouTube's
+        # own player API, then the audio download itself cutting off
+        # partway through and giving up. Both are raised so a slow or
+        # flaky connection gets more time per request and more attempts
+        # before the download is given up on.
+        "socket_timeout": 30,
+        "retries": 20,
+        "fragment_retries": 20,
     }
 
 

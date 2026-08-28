@@ -19,8 +19,9 @@ Open PowerShell and paste:
 irm https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-windows.ps1 | iex
 ```
 
-This installs Python, Git, ffmpeg and chromaprint if any are missing,
-downloads yt2y1, installs both tools, and finishes by running `y1sync
+This installs Python, Git, ffmpeg, chromaprint and deno (a JS runtime
+yt-dlp uses for reliable YouTube downloads) if any are missing, downloads
+yt2y1, installs both tools, and finishes by running `y1sync
 doctor` so you can see everything is actually ready. There's nothing to
 type partway through — audio fingerprinting works out of the box (see
 [below](#how-does-it-identify-tracks)). It's safe to run again if
@@ -39,8 +40,10 @@ Open a terminal and paste:
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-linux.sh)"
 ```
 
-This installs Python, git, ffmpeg and chromaprint via `apt` if any are
-missing, downloads yt2y1, installs both tools into one virtual environment
+This installs Python, git, ffmpeg and chromaprint via `apt`, plus deno (a
+JS runtime yt-dlp uses for reliable YouTube downloads) via its own
+installer, if any are missing, downloads yt2y1, installs both tools into
+one virtual environment
 shared between them, adds them to your PATH, and finishes by running
 `y1sync doctor` so you can see everything is actually ready. There's
 nothing to type partway through — audio fingerprinting works out of the
@@ -60,8 +63,9 @@ Open Terminal and paste:
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-macos.sh)"
 ```
 
-This installs Homebrew itself if it's missing, then Python, git, ffmpeg
-and chromaprint via Homebrew if any of those are missing, downloads
+This installs Homebrew itself if it's missing, then Python, git, ffmpeg,
+chromaprint and deno (a JS runtime yt-dlp uses for reliable YouTube
+downloads) via Homebrew if any of those are missing, downloads
 yt2y1, installs both tools into one virtual environment shared between
 them, adds them to your PATH, and finishes by running `y1sync doctor` so
 you can see everything is actually ready. There's nothing to type partway
@@ -98,29 +102,34 @@ instead.)*
 | **git** | to download this repo | [git-scm.com](https://git-scm.com/downloads) |
 | **ffmpeg** | converts downloaded audio to MP3, and is used when decoding audio for tagging | see below |
 | **chromaprint** (`fpcalc`) | computes the audio fingerprint y1sync uses to identify tracks accurately | see below |
+| **deno** (or another JS runtime) | yt-dlp uses it to extract YouTube reliably; without one, downloads still work but time out and fail more often | see below |
 | **The Y1 itself, over USB** | only needed for the last step, sending files to the device | — |
 
 The AcoustID lookup y1sync uses to identify tracks needs no account — a
 key is built in (see [above](#how-does-it-identify-tracks)). y1sync still
 works without chromaprint too; it just falls back to guessing tags from
 filenames and asks you to confirm every one, which is roughly as much
-effort as tagging by hand. Installing it is worth it.
+effort as tagging by hand. Installing it is worth it. deno is the same
+kind of thing: not a hard requirement, but skipping it makes YouTube
+downloads slower and more prone to failing partway through.
 
-### Installing ffmpeg and chromaprint
+### Installing ffmpeg, chromaprint and deno
 
 ```bash
 # macOS
-brew install ffmpeg chromaprint
+brew install ffmpeg chromaprint deno
 
 # Debian, Ubuntu
 sudo apt install ffmpeg libchromaprint-tools
+curl -fsSL https://deno.land/install.sh | sh   # deno isn't packaged in apt
 
 # Windows
 # ffmpeg:      https://ffmpeg.org/download.html
 # chromaprint: https://acoustid.org/chromaprint (grab the fpcalc build)
-# Extract both and add their folders to your PATH (System Properties ->
-# Environment Variables -> Path), then open a new terminal so it picks
-# up the change.
+# deno:        winget install DenoLand.Deno
+# Extract ffmpeg and chromaprint and add their folders to your PATH
+# (System Properties -> Environment Variables -> Path), then open a new
+# terminal so it picks up the change.
 ```
 
 Both tools have been run end-to-end on Windows and on Linux; macOS hasn't

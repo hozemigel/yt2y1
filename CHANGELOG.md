@@ -17,6 +17,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 - **Ctrl+C during a review prompt no longer dumps a traceback.** It's now
   caught cleanly and prints "Cancelled."
 
+### Added
+- **The installers now set up deno**, a JS runtime yt-dlp uses for
+  reliable YouTube extraction. Without one, downloads fall back to a
+  slower, more failure-prone path — seen for real as repeated read
+  timeouts fetching YouTube's player API and a download that cuts off
+  partway through. Not a hard requirement — YouTube downloads still work
+  without it, just less reliably — so `y1sync doctor` reports it as
+  recommended rather than blocking readiness on it.
+- yt2mp3's downloads are more resilient to a slow or flaky connection:
+  yt-dlp's socket timeout and retry counts are both raised.
+
 ## [0.1.0] - 2026-08-28
 
 Initial tagged release. Both tools have been run end to end against the real

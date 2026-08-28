@@ -16,8 +16,9 @@
 # the whole script into a string first, so there's no live pipe left
 # for anything to race against.
 #
-# It installs Homebrew itself if missing, then Python, git, ffmpeg and
-# chromaprint via Homebrew if any of those are missing, clones (or
+# It installs Homebrew itself if missing, then Python, git, ffmpeg,
+# chromaprint and deno (a JS runtime yt-dlp uses for reliable YouTube
+# downloads) via Homebrew if any of those are missing, clones (or
 # updates) yt2y1 into ~/yt2y1, installs both tools into one dedicated
 # virtual environment shared between them -- so y1sync's "Download from
 # YouTube" menu option can still import yt2mp3, and so this doesn't run
@@ -121,6 +122,27 @@ if [ "${#brew_missing[@]}" -eq 0 ]; then
 else
     echo "  Installing: ${brew_missing[*]}"
     brew install "${brew_missing[@]}"
+fi
+
+# --- 4b. deno (JS runtime for reliable YouTube downloads) ----------------
+#
+# Not required the way the packages above are -- y1sync's readiness check
+# doesn't depend on it, and yt2mp3 still works without it. But yt-dlp's
+# YouTube extraction is markedly less reliable without a JS runtime
+# present (more timeouts, occasional failed downloads). Installed
+# separately from brew_missing above so that a failure here is a
+# warning, not a reason to abort the whole install the way a failed
+# ffmpeg or chromaprint install would be.
+
+write_step "Checking for a JS runtime (deno)..."
+if has_cmd deno; then
+    echo "  Already installed, skipping."
+elif brew install deno; then
+    :
+else
+    echo "  Could not install deno automatically -- YouTube downloads will"
+    echo "  still work, just less reliably. See"
+    echo "  https://docs.deno.com/runtime/getting_started/installation/"
 fi
 
 # --- 5. Clone or update yt2y1 --------------------------------------------

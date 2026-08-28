@@ -15,7 +15,9 @@
 # there's no live pipe left for anything to race against.
 #
 # It installs Python, git, ffmpeg and chromaprint via apt if any are
-# missing, clones (or updates) yt2y1 into ~/yt2y1, installs both tools
+# missing, plus deno (a JS runtime yt-dlp uses for reliable YouTube
+# downloads) via its own installer since apt doesn't package it, clones
+# (or updates) yt2y1 into ~/yt2y1, installs both tools
 # into one dedicated virtual environment shared between them -- so
 # y1sync's "Download from YouTube" menu option can still import yt2mp3,
 # and so this doesn't run into newer Debian/Ubuntu's refusal to "pip
@@ -93,6 +95,39 @@ else
     echo "  Installing: ${apt_missing[*]}"
     $SUDO apt-get update
     $SUDO apt-get install -y "${apt_missing[@]}"
+fi
+
+# --- 4b. deno (JS runtime for reliable YouTube downloads) ----------------
+#
+# Not required the way the packages above are -- y1sync's readiness check
+# doesn't depend on it, and yt2mp3 still works without it. But yt-dlp's
+# YouTube extraction is markedly less reliable without a JS runtime
+# present (more timeouts, occasional failed downloads), and deno isn't
+# packaged in apt, so it's installed separately via its own official
+# installer rather than folded into apt_missing above. A failure here is
+# a warning, not a reason to stop -- nothing downstream actually requires
+# it.
+
+write_step "Checking for a JS runtime (deno)..."
+
+DENO_BIN_DIR="$HOME/.deno/bin"
+if has_cmd deno; then
+    echo "  Already installed, skipping."
+elif curl -fsSL https://deno.land/install.sh | sh; then
+    case ":$PATH:" in
+        *":$DENO_BIN_DIR:"*) ;;
+        *) export PATH="$DENO_BIN_DIR:$PATH" ;;
+    esac
+    for rc in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc"; do
+        [ -f "$rc" ] || continue
+        if ! grep -qF "$DENO_BIN_DIR" "$rc" 2>/dev/null; then
+            printf '\nexport PATH="%s:$PATH"\n' "$DENO_BIN_DIR" >> "$rc"
+        fi
+    done
+else
+    echo "  Could not install deno automatically -- YouTube downloads will"
+    echo "  still work, just less reliably. See"
+    echo "  https://docs.deno.com/runtime/getting_started/installation/"
 fi
 
 # --- 5. Clone or update yt2y1 --------------------------------------------

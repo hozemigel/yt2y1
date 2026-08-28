@@ -312,10 +312,16 @@ def test_doctor_reports_the_cache_location(tmp_path, capsys, monkeypatch):
     assert "somecache" in capsys.readouterr().out
 
 
-def _stub_doctor_environment(monkeypatch, *, ffmpeg=True, fpcalc=True, key="abc", device=None):
+def _stub_doctor_environment(
+    monkeypatch, *, ffmpeg=True, fpcalc=True, deno=True, key="abc", device=None
+):
     monkeypatch.setattr(
         "y1sync.cli.shutil.which",
-        lambda name: (f"/usr/bin/{name}" if {"ffmpeg": ffmpeg, "fpcalc": fpcalc}[name] else None),
+        lambda name: (
+            f"/usr/bin/{name}"
+            if {"ffmpeg": ffmpeg, "fpcalc": fpcalc, "deno": deno}[name]
+            else None
+        ),
     )
     monkeypatch.setattr("y1sync.cli.load_config", lambda: Config(acoustid_key=key))
     monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device] if device else [])
@@ -325,8 +331,16 @@ def test_doctor_marks_every_present_tool_with_a_checkmark(capsys, monkeypatch):
     _stub_doctor_environment(monkeypatch)
     main(["doctor"])
     out = capsys.readouterr().out
-    assert out.count("✓") == 2  # ffmpeg and chromaprint -- not the device
+    assert out.count("✓") == 3  # ffmpeg, chromaprint and deno -- not the device
     assert "✗" in out  # the device, since none was stubbed in
+
+
+def test_doctor_recommends_deno_when_missing_without_affecting_readiness(capsys, monkeypatch):
+    _stub_doctor_environment(monkeypatch, deno=False)
+    main(["doctor"])
+    out = capsys.readouterr().out
+    assert "✗ JS runtime (deno)  (" in out
+    assert "You're ready" in out  # deno is a recommendation, not a prerequisite
 
 
 def test_doctor_shows_a_hint_only_for_a_missing_item(capsys, monkeypatch):
