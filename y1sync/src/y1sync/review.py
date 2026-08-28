@@ -125,20 +125,36 @@ def choose_candidate(
     output_fn(f"\n{header}")
     output_fn(f"  {Path(path).name}")
 
-    if ranked and ranked[0].source == "youtube":
-        top = ranked[0]
-        detail = ", ".join(part for part in (top.meta.album, top.meta.year) if part)
+    # Any youtube-sourced candidate is worth naming, not just a
+    # top-ranked one: what the YouTube page claimed is context for the
+    # whole list, and gating on position hid it whenever ranking put some
+    # other candidate first. Informational only -- it changes no choice.
+    from_youtube = next((c for c in ranked if c.source == "youtube"), None)
+    if from_youtube is not None:
+        detail = ", ".join(
+            part for part in (from_youtube.meta.album, from_youtube.meta.year) if part
+        )
         suffix = f" ({detail})" if detail else ""
         output_fn(
-            f"  From the YouTube page: {top.meta.artist} — {top.meta.title}{suffix}"
+            "  From the YouTube page: "
+            f"{from_youtube.meta.artist} — {from_youtube.meta.title}{suffix}"
         )
 
     stem = Path(path).stem
     titles = {candidate.meta.title for candidate in ranked if candidate.meta.title}
     if titles and not any(_matches_filename(title, stem) for title in titles):
+        # Only a fingerprint match can claim to have read the audio. A
+        # hint- or filename-derived match knows nothing about it, and
+        # saying "Fingerprint says" there would lend a guess authority it
+        # does not have -- on a path where no fingerprint even ran.
+        says = (
+            "Fingerprint says this is"
+            if ranked[0].source == "acoustid"
+            else "The match says this is"
+        )
         output_fn("")
         output_fn(
-            f'  Fingerprint says this is "{ranked[0].meta.title}", which does not '
+            f'  {says} "{ranked[0].meta.title}", which does not '
             "match the filename. Listen to the track before choosing — the file "
             "may be mislabeled."
         )

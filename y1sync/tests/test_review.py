@@ -246,3 +246,40 @@ def test_a_tip_is_shown_only_when_there_is_more_than_one_option():
     choose_candidate(Path("f.mp3"), options, input_fn=lambda _: "s",
                      output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
     assert any("usually the right one" in line for line in lines)
+
+
+def _youtube_cand(artist="SZA", title="Snooze", album="SOS", year="2022"):
+    return Candidate(
+        meta=TrackMeta(artist=artist, title=title, album=album, year=year),
+        confidence=0.1, source="youtube", release_group_type="Album",
+        release_status="Official", release_date=None,
+    )
+
+
+def test_the_youtube_line_shows_even_when_that_candidate_is_not_first():
+    # What the YouTube page claimed is context for the whole list, not a
+    # property of whatever happens to rank first.
+    lines = []
+    choose_candidate(Path("snooze.mp3"), [cand("Rumours"), _youtube_cand()],
+                     input_fn=lambda _: "s", output_fn=lines.append)
+    assert any(
+        "From the YouTube page: SZA — Snooze (SOS, 2022)" in line for line in lines
+    )
+
+
+def test_a_filename_mismatch_on_a_fingerprint_match_says_so():
+    lines = []
+    choose_candidate(Path("something else entirely.mp3"), [cand("Rumours")],
+                     input_fn=lambda _: "s", output_fn=lines.append)
+    assert any('Fingerprint says this is "Y"' in line for line in lines)
+
+
+def test_a_filename_mismatch_without_a_fingerprint_does_not_claim_one():
+    # Nothing fingerprinted this file, so the warning must not borrow the
+    # fingerprint's authority for what is only a guess from the page.
+    lines = []
+    choose_candidate(Path("something else entirely.mp3"), [_youtube_cand()],
+                     input_fn=lambda _: "s", output_fn=lines.append)
+    warning = [line for line in lines if "does not match the filename" in line]
+    assert warning
+    assert "Fingerprint" not in "\n".join(lines)
