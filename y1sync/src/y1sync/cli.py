@@ -6,18 +6,22 @@ import subprocess
 import sys
 from pathlib import Path
 
+from mutagen import File as MutagenFile
 from mutagen import MutagenError
-from mutagen.mp3 import MP3
 
 from .artwork import artwork_url_for, fetch_artwork
 from .cache import ContentCache
 from .config import Config, load_config, save_config
-from .device import backup_device, find_devices, needs_copy, safe_copy
+from .device import (
+    backup_device, find_devices, needs_copy, needs_transcode, safe_copy,
+)
+from .formats import SUPPORTED_EXTENSIONS, device_target_name, find_audio
 from .identify import AcoustIDKeyRejected, acoustid_key, identify
 from .naming import rename_file, resolve_collision, safe_filename
 from .ranking import decide, length_mismatch
 from .review import choose_candidate
 from .tagging import write_tags
+from .transcode import wav_to_flac
 
 CACHE_ROOT = Path.home() / ".cache" / "y1sync"
 BACKUP_ROOT = Path.home() / ".local" / "share" / "y1sync" / "backups"
@@ -36,7 +40,7 @@ _MAX_DIRS_VISITED = 20000
 
 
 def discover_music_folders(root: Path, limit: int = 6) -> list[Path]:
-    """Find folders under root that directly contain MP3 files.
+    """Find folders under root that directly contain music files.
 
     Runs before the user has done anything else, so it is bounded in both
     depth and total directories visited: on a home directory with years
@@ -54,7 +58,8 @@ def discover_music_folders(root: Path, limit: int = 6) -> list[Path]:
             entries = list(directory.iterdir())
         except OSError:
             return
-        if any(e.is_file() and e.suffix.lower() == ".mp3" for e in entries):
+        if any(e.is_file() and e.suffix.lower() in SUPPORTED_EXTENSIONS
+               for e in entries):
             found.append(directory)
         if depth >= _MAX_SEARCH_DEPTH:
             return
@@ -89,8 +94,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("doctor", help="Report dependencies and device status")
 
-    scan = subparsers.add_parser("scan", help="Identify, tag and rename MP3s in a folder")
-    scan.add_argument("folder", help="Folder containing MP3 files")
+    scan = subparsers.add_parser("scan", help="Identify, tag and rename music files in a folder")
+    scan.add_argument("folder", help="Folder containing music files")
     scan.add_argument("--dry-run", action="store_true",
                        help="Report what would change; write nothing")
     scan.add_argument("--yes", action="store_true",
@@ -102,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     # every file it decides to touch is copied outright, so accepting one
     # here would silently do nothing, which is worse than not offering it.
     sync = subparsers.add_parser("sync", help="Copy a prepared folder to the device")
-    sync.add_argument("folder", help="Folder containing MP3 files")
+    sync.add_argument("folder", help="Folder containing music files")
     sync.add_argument("--dry-run", action="store_true",
                        help="Report what would change; write nothing")
     sync.add_argument("--verbose", action="store_true",
@@ -271,7 +276,7 @@ def cmd_check_for_updates(input_fn=input, output_fn=print) -> int:
 
 
 def _existing_names(directory: Path) -> set[str]:
-    """Every name already present in a directory, MP3 or not."""
+    """Every name already present in a directory, audio or not."""
     try:
         return {entry.name for entry in directory.iterdir()}
     except OSError:
@@ -292,25 +297,18 @@ def _audio_length(path: Path) -> float | None:
     full-length original.
     """
     try:
-        return MP3(path).info.length
+        audio = MutagenFile(path)
     except (MutagenError, OSError, ValueError):
         return None
-
-
-def _find_mp3s(root: Path) -> list[Path]:
-    """Every MP3 under root, at any depth, sorted for stable output.
-
-    A library organised into artist/album folders is the normal case, not
-    an edge case: iterdir() alone would miss almost everything a real
-    music collection contains.
-    """
-    return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".mp3")
+    if audio is None or audio.info is None:
+        return None
+    return getattr(audio.info, "length", None)
 
 
 def cmd_scan(
     folder: str, dry_run: bool, yes: bool, verbose: bool, only: set[Path] | None = None
 ) -> int:
-    """Identify, tag and rename the MP3s under folder.
+    """Identify, tag and rename the music files under folder.
 
     ``only``, when given, restricts the run to that subset of files rather
     than everything under folder -- used by cmd_download_and_sync so that
@@ -324,7 +322,7 @@ def cmd_scan(
         print(f"Not a folder: {root}")
         return 1
 
-    files = _find_mp3s(root)
+    files = find_audio(root)
     if only is not None:
         # Resolved on both sides before comparing: `only`'s paths come from
         # yt-dlp's own report of what it wrote, which isn't guaranteed to
@@ -335,7 +333,7 @@ def cmd_scan(
         files = [path for path in files if path.resolve() in only_resolved]
     if not files:
         if only is None:
-            print(f"No MP3 files in {root}")
+            print(f"No music files in {root}")
         return 0
 
     config = load_config()
@@ -411,7 +409,7 @@ def cmd_scan(
             # cascade of " (2)" suffixes. The comparison is case-insensitive
             # because FAT32 is.
             others = {n for n in names if n.lower() != path.name.lower()}
-            new_name = resolve_collision(safe_filename(pick.meta), others)
+            new_name = resolve_collision(safe_filename(pick.meta, path.suffix), others)
             names.add(new_name)
 
             if verbose:
@@ -475,22 +473,35 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
         return 1
 
     device = devices[0]
-    files = _find_mp3s(source)
+    files = find_audio(source)
     print(f"Device: {device}")
 
     # The tree found under the source folder is preserved on the device
     # rather than flattened: two files both called "rip.mp3" in different
-    # album folders must not collide in Music/. Only files the device
-    # doesn't already have byte-for-byte are copied -- see needs_copy().
+    # album folders must not collide in Music/. A WAV maps to a FLAC on
+    # the way across -- see device_target_name().
+    def destination(path: Path) -> Path:
+        return device / "Music" / device_target_name(path.relative_to(source))
+
+    def is_wav(path: Path) -> bool:
+        return path.suffix.lower() == ".wav"
+
+    # A WAV's device copy is a re-encode, not a byte copy, so "is it
+    # already there" is a presence-and-mtime check rather than needs_copy's
+    # size comparison.
     pending = [
         path for path in files
-        if needs_copy(path, device / "Music" / path.relative_to(source))
+        if (needs_transcode if is_wav(path) else needs_copy)(path, destination(path))
     ]
     unchanged = len(files) - len(pending)
 
     if dry_run:
         for path in pending:
-            print(f"  would copy  {path.relative_to(source)}")
+            rel = path.relative_to(source)
+            if is_wav(path):
+                print(f"  would convert  {rel} -> {device_target_name(rel)}")
+            else:
+                print(f"  would copy  {rel}")
         print(f"\n{len(pending)} file(s) would be copied.")
         if unchanged:
             print(f"{unchanged} file(s) already on the device, unchanged.")
@@ -509,9 +520,14 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
     for path in pending:
         rel = path.relative_to(source)
         try:
-            safe_copy(path, device / "Music" / rel)
-            if verbose:
-                print(f"  copied   {rel}")
+            if is_wav(path):
+                wav_to_flac(path, destination(path))
+                if verbose:
+                    print(f"  converted  {rel} -> {device_target_name(rel).name}")
+            else:
+                safe_copy(path, destination(path))
+                if verbose:
+                    print(f"  copied   {rel}")
         except Exception as exc:
             failures += 1
             print(f"  FAILED   {rel}: {exc}")

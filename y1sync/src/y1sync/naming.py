@@ -73,8 +73,15 @@ def sanitize_component(text: str) -> str:
     return text.strip(" .")
 
 
-def safe_filename(meta: TrackMeta, max_len: int = 100) -> str:
-    """Build "Artist - Title.mp3", safe on every supported platform."""
+def safe_filename(meta: TrackMeta, ext: str = ".mp3", max_len: int = 100) -> str:
+    """Build "Artist - Title<ext>", safe on every supported platform.
+
+    ``ext`` is the source file's own extension, kept so a FLAC stays a
+    FLAC. Lower-cased because FAT32 is case-insensitive and a mix of
+    "Song.FLAC" and "Song.flac" invites collisions the device can't tell
+    apart.
+    """
+    ext = ext if ext.startswith(".") else f".{ext}"
     artist = sanitize_component(meta.artist)
     title = sanitize_component(meta.title)
     stem = f"{artist} - {title}".strip(" -") if artist else title
@@ -84,7 +91,7 @@ def safe_filename(meta: TrackMeta, max_len: int = 100) -> str:
     # A file named CON.mp3 cannot be opened on Windows.
     if stem.upper() in WINDOWS_RESERVED:
         stem = f"{stem}_"
-    return f"{stem}.mp3"
+    return f"{stem}{ext.lower()}"
 
 
 def resolve_collision(name: str, taken: set[str]) -> str:

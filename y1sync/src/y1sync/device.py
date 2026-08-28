@@ -150,6 +150,22 @@ def needs_copy(src: Path, dst: Path) -> bool:
     return abs(dst_stat.st_mtime - src_stat.st_mtime) > _MTIME_TOLERANCE
 
 
+def needs_transcode(src: Path, dst: Path) -> bool:
+    """True when dst, a converted file, is missing or older than src.
+
+    Unlike needs_copy, dst is not a byte-for-byte copy of src, so size
+    tells us nothing -- only presence and mtime can say whether an
+    earlier sync already produced it. wav_to_flac() mirrors src's mtime
+    onto dst once the conversion lands, exactly as safe_copy() does for a
+    plain copy, which is what makes this comparison hold across runs.
+    """
+    try:
+        dst_stat = dst.stat()
+    except OSError:
+        return True
+    return abs(dst_stat.st_mtime - src.stat().st_mtime) > _MTIME_TOLERANCE
+
+
 def safe_copy(src: Path, dst: Path) -> None:
     """Copy src to dst so an interruption cannot corrupt dst.
 

@@ -81,7 +81,7 @@ def test_doctor_reports_status(capsys):
 
 def test_scan_on_empty_folder_succeeds(tmp_path, capsys):
     assert main(["scan", str(tmp_path)]) == 0
-    assert "no mp3" in capsys.readouterr().out.lower()
+    assert "no music files" in capsys.readouterr().out.lower()
 
 
 def test_scan_on_missing_folder_fails(tmp_path, capsys):
@@ -216,6 +216,19 @@ def test_rescanning_an_already_correct_file_is_a_no_op(tmp_path, capsys, monkeyp
         "Artist - Title.mp3"
     ]
     assert correct.read_bytes() == b"audio"
+
+
+def test_scan_keeps_each_file_its_own_extension(tmp_path, monkeypatch):
+    # A mixed-format folder: the rename must not turn everything into .mp3.
+    for name in ("a.flac", "b.ogg", "c.m4a", "d.wav", "e.mp3"):
+        (tmp_path / name).write_bytes(name.encode())
+
+    _stub_scan_side_effects(monkeypatch, tmp_path)
+    assert main(["scan", str(tmp_path)]) == 0
+
+    extensions = sorted(p.suffix for p in tmp_path.iterdir() if p.is_file())
+    assert extensions == [".flac", ".m4a", ".mp3", ".ogg", ".wav"]
+    assert (tmp_path / "Artist - Title.flac").exists()
 
 
 def _ambiguous_candidates() -> list[Candidate]:
@@ -535,6 +548,77 @@ def test_sync_dry_run_previews_the_whole_tree(tmp_path, capsys, monkeypatch):
     # --dry-run writes nothing anywhere, including no backup.
     assert not (tmp_path / "backups").exists()
     assert not any((device / "Music").iterdir())
+
+
+def test_sync_converts_a_wav_to_a_tagged_flac_on_the_device(
+    tmp_path, monkeypatch, make_audio
+):
+    from mutagen.flac import FLAC
+    from y1sync.models import TrackMeta
+    from y1sync.tagging import write_tags
+
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library" / "Massive Attack"
+    source.mkdir(parents=True)
+    wav = source / "Teardrop.wav"
+    wav.write_bytes(make_audio(".wav").read_bytes())
+    write_tags(wav, TrackMeta(artist="Massive Attack", title="Teardrop",
+                              album="Mezzanine", year="1998"),
+               artwork=b"\xff\xd8\xff" + b"z" * 4000)
+
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+
+    assert main(["sync", str(tmp_path / "library")]) == 0
+
+    flac = device / "Music" / "Massive Attack" / "Teardrop.flac"
+    assert flac.exists()
+    assert not (device / "Music" / "Massive Attack" / "Teardrop.wav").exists()
+    tags = FLAC(flac)
+    assert tags["artist"] == ["Massive Attack"]
+    assert tags["album"] == ["Mezzanine"]
+    assert len(tags.pictures) == 1
+
+
+def test_sync_does_not_reconvert_an_unchanged_wav(tmp_path, monkeypatch, make_audio):
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library"
+    source.mkdir()
+    (source / "Song.wav").write_bytes(make_audio(".wav").read_bytes())
+
+    backups = []
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+    monkeypatch.setattr("y1sync.cli.backup_device",
+                        lambda dev, root: backups.append(1) or (root / "stub"))
+
+    assert main(["sync", str(source)]) == 0
+    assert len(backups) == 1
+
+    flac = device / "Music" / "Song.flac"
+    first_mtime = flac.stat().st_mtime
+
+    assert main(["sync", str(source)]) == 0
+    assert len(backups) == 1, "second sync must find the FLAC already current"
+    assert flac.stat().st_mtime == first_mtime
+
+
+def test_sync_dry_run_names_the_wav_conversion(tmp_path, capsys, monkeypatch, make_audio):
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library"
+    source.mkdir()
+    (source / "Song.wav").write_bytes(make_audio(".wav").read_bytes())
+
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+
+    assert main(["sync", str(source), "--dry-run"]) == 0
+
+    out = capsys.readouterr().out
+    assert "would convert" in out
+    assert "Song.wav -> Song.flac" in out
+    assert not (tmp_path / "backups").exists()
+
 
 
 # --- --yes must not accept filename guesses ----------------------------

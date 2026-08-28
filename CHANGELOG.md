@@ -6,6 +6,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 
 ## [Unreleased]
 
+### Added
+- **`y1sync` now identifies, tags and renames FLAC, Ogg Vorbis and M4A
+  files, not just MP3.** The Y1's firmware plays all of these, and a
+  library ripped from CD or bought from a store that isn't iTunes is
+  rarely all MP3. Each format is written in the tag scheme its readers
+  expect — ID3v2.3 for MP3, Vorbis comments (with an `ALBUMARTIST` mirror
+  for device grouping) for FLAC and Ogg, iTunes-style atoms for M4A — and
+  each file keeps its own extension through the rename. Fingerprint
+  identification already decoded any format; the scan just no longer skips
+  the file. Formats the tagger can't write (APE, AMR, raw AAC, …) are left
+  untouched. The identification cache keys non-MP3 files on their audio
+  fingerprint, so re-tagging one still hits the cache on the next run.
+- **WAV files are put on the device as FLAC.** Testing on a real Y1
+  showed it plays WAV but reads nothing from its tags — no artist, no
+  album, no cover. `scan` still identifies and renames a WAV in place (and
+  writes ID3 tags a desktop player will read), and `sync` then transcodes
+  it to FLAC on the way to the device, carrying the tags and cover across.
+  The FLAC is written 16-bit, capped at 48 kHz — the Y1's decoder rejects
+  hi-res FLAC as a "broken file" — so a CD-shaped WAV converts losslessly
+  and a hi-res master loses only what the device could not have played.
+  The library's own WAV file is never modified, and a converted file that
+  has not changed since the last sync is not re-encoded.
+
 ## [0.2.0] - 2026-08-28
 
 ### Added

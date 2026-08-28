@@ -1,6 +1,8 @@
+import pytest
+
 from mutagen.id3 import ID3
 from y1sync.models import TrackMeta
-from y1sync.tagging import write_tags, read_tags
+from y1sync.tagging import read_artwork, write_tags, read_tags
 
 META = TrackMeta(
     artist="Fleetwood Mac", title="Dreams", album="Rumours",
@@ -69,3 +71,86 @@ def test_round_trips_through_read_tags(silent_mp3):
 
 def test_read_tags_returns_none_for_untagged_file(silent_mp3):
     assert read_tags(silent_mp3) is None
+
+
+def test_write_tags_rejects_an_unsupported_extension(tmp_path):
+    junk = tmp_path / "track.ape"
+    junk.write_bytes(b"x")
+    with pytest.raises(ValueError):
+        write_tags(junk, META)
+
+
+# --- non-MP3 formats ----------------------------------------------------
+
+OTHER_FORMATS = [".flac", ".ogg", ".m4a", ".wav"]
+
+
+@pytest.mark.parametrize("ext", OTHER_FORMATS)
+def test_round_trips_every_supported_format(make_audio, ext):
+    path = make_audio(ext)
+    write_tags(path, META)
+    assert read_tags(path) == META
+
+
+@pytest.mark.parametrize("ext", OTHER_FORMATS)
+def test_reads_none_before_anything_is_written(make_audio, ext):
+    assert read_tags(make_audio(ext)) is None
+
+
+@pytest.mark.parametrize("ext", OTHER_FORMATS)
+def test_omits_optional_fields_when_absent(make_audio, ext):
+    path = make_audio(ext)
+    write_tags(path, TrackMeta(artist="A", title="B", album="C"))
+    restored = read_tags(path)
+    assert (restored.year, restored.genre, restored.track_number) == (None, None, None)
+
+
+@pytest.mark.parametrize("ext", OTHER_FORMATS)
+def test_embeds_a_single_cover(make_audio, ext):
+    path = make_audio(ext)
+    write_tags(path, META, artwork=b"\xff\xd8\xff" + b"x" * 2000)
+    write_tags(path, META, artwork=b"\xff\xd8\xff" + b"y" * 2000)
+    assert _cover_count(path, ext) == 1
+
+
+@pytest.mark.parametrize("ext", OTHER_FORMATS)
+def test_writing_twice_does_not_duplicate_fields(make_audio, ext):
+    path = make_audio(ext)
+    write_tags(path, META)
+    write_tags(path, META)
+    assert read_tags(path) == META
+
+
+def test_flac_and_ogg_carry_an_album_artist(make_audio):
+    for ext in (".flac", ".ogg"):
+        path = make_audio(ext)
+        write_tags(path, META)
+        from mutagen import File
+        assert File(path)["albumartist"] == [META.artist]
+
+
+@pytest.mark.parametrize("ext", [".mp3", ".flac", ".ogg", ".m4a", ".wav"])
+def test_read_artwork_round_trips(make_audio, ext):
+    art = b"\xff\xd8\xff" + b"k" * 1800
+    path = make_audio(ext)
+    assert read_artwork(path) is None
+    write_tags(path, META, artwork=art)
+    assert read_artwork(path) == art
+
+
+def test_read_artwork_is_none_for_an_unreadable_file(tmp_path):
+    junk = tmp_path / "x.flac"
+    junk.write_bytes(b"not a flac")
+    assert read_artwork(junk) is None
+
+
+def _cover_count(path, ext):
+    from mutagen import File
+    audio = File(path)
+    if ext == ".flac":
+        return len(audio.pictures)
+    if ext == ".ogg":
+        return len(audio.get("metadata_block_picture") or [])
+    if ext == ".m4a":
+        return len(audio.get("covr") or [])
+    return len(audio.tags.getall("APIC"))

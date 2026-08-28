@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from y1sync.models import TrackMeta, Candidate
 from y1sync.cache import ContentCache, content_hash
 from y1sync.tagging import write_tags
@@ -103,6 +105,40 @@ def test_round_trips_the_recording_length(tmp_path):
     cache = ContentCache(tmp_path / "cache")
     cache.put(audio, [make_candidate()])
     assert cache.get(audio).candidates[0].stated_duration == 211.0
+
+
+OTHER_FORMATS = [".flac", ".ogg", ".m4a", ".wav"]
+
+
+@pytest.mark.parametrize("ext", OTHER_FORMATS)
+def test_hash_survives_tagging_for_every_format(make_audio, ext):
+    # The whole point of the cache: a scan that tags a file must still
+    # find that file's entry on the next run.
+    path = make_audio(ext)
+    before = content_hash(path)
+    write_tags(
+        path,
+        TrackMeta(artist="A", title="B", album="C", year="1999", genre="Pop"),
+        artwork=b"\xff\xd8\xff" + b"x" * 5000,
+    )
+    assert content_hash(path) == before
+
+
+@pytest.mark.parametrize("ext", OTHER_FORMATS)
+def test_cache_hits_after_a_non_mp3_file_is_tagged(make_audio, ext, tmp_path):
+    path = make_audio(ext)
+    cache = ContentCache(tmp_path / "cache")
+    cache.put(path, [make_candidate()])
+    write_tags(path, TrackMeta(artist="A", title="B", album="C"))
+    entry = cache.get(path)
+    assert entry is not None
+    assert entry.candidates == [make_candidate()]
+
+
+def test_hash_distinguishes_different_non_mp3_audio(make_audio):
+    tone = make_audio(".flac", name="a")
+    noise = make_audio(".flac", name="b", src="anoisesrc=color=pink:seed=1")
+    assert content_hash(tone) != content_hash(noise)
 
 
 def test_loads_an_entry_written_before_stated_duration_existed(tmp_path):
