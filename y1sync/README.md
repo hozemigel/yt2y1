@@ -115,12 +115,15 @@ remembers the answer. After that you get a menu:
 2. Update player  (find new tracks, then send them over)
 3. Change music folder
 4. Check setup
-5. Quit
+5. Check for updates
+6. Quit
 ```
 
 Option 1 needs yt2mp3 installed (see [Install](#install)); it asks for a
 YouTube URL and a bitrate, downloads, and runs the same tag-and-send flow
-as option 2 automatically.
+as option 2 automatically. Option 5 only works with the standard
+[install](#install) below -- it checks the cloned repo for new commits
+and offers to pull and reinstall.
 
 For scripting, or if you'd rather control each step yourself, the
 underlying commands still work directly:

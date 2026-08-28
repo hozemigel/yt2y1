@@ -2,6 +2,7 @@
 
 import argparse
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -172,6 +173,100 @@ def cmd_doctor() -> int:
     print("\n" + "-" * 40)
     print(f"Cache: {CACHE_ROOT}")
     print("(delete this folder to re-check songs already tagged)")
+    return 0
+
+
+# Where the installers clone the repo -- ~/yt2y1 on every platform, since
+# Path.home() resolves to the right thing on Windows too. Checking for
+# updates only works against this standard layout; a custom install
+# elsewhere is told so rather than guessed at.
+REPO_DIR = Path.home() / "yt2y1"
+
+
+def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess | None:
+    """Run a git command in cwd. None means git itself couldn't be run."""
+    try:
+        return subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=60,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+
+
+def cmd_check_for_updates(input_fn=input, output_fn=print) -> int:
+    """Check the cloned repo for new commits, and offer to pull and reinstall.
+
+    Assumes the standard layout the installers set up: yt2y1 cloned to
+    REPO_DIR, running from whatever interpreter -- venv or system --
+    y1sync happens to be installed into. Reinstalling uses sys.executable
+    rather than assuming a venv exists, so the same "pip install
+    --upgrade" lands correctly regardless of which installer was used.
+    """
+    if not (REPO_DIR / ".git").is_dir():
+        output_fn(f"No git checkout found at {REPO_DIR}.")
+        output_fn("Updates can only be checked for the standard install -- "
+                   "re-run the installer from the README to get the latest version.")
+        return 1
+
+    output_fn("Checking for updates...")
+    fetch = _run_git(["fetch", "--quiet"], REPO_DIR)
+    if fetch is None or fetch.returncode != 0:
+        output_fn("Could not check for updates -- are you online?")
+        if fetch is not None and fetch.stderr.strip():
+            output_fn(fetch.stderr.strip())
+        return 1
+
+    count = _run_git(["rev-list", "--count", "HEAD..@{u}"], REPO_DIR)
+    if count is None or count.returncode != 0:
+        output_fn("Could not compare against the remote -- this checkout may not be")
+        output_fn("on a branch with an upstream set.")
+        return 1
+
+    behind = int(count.stdout.strip() or 0)
+    if behind == 0:
+        output_fn("Already up to date.")
+        return 0
+
+    plural = "commit" if behind == 1 else "commits"
+    output_fn(f"\n{behind} new {plural} available:")
+    log = _run_git(["log", "--oneline", "HEAD..@{u}"], REPO_DIR)
+    if log is not None and log.stdout.strip():
+        for line in log.stdout.splitlines():
+            output_fn(f"  {line}")
+
+    reply = input_fn("\nUpdate now? [Y/n]: ").strip().lower()
+    if reply not in ("", "y", "yes"):
+        output_fn("Not updating.")
+        return 0
+
+    output_fn("\nPulling the latest changes...")
+    # --ff-only: a local checkout the installer manages should never have
+    # its own commits to reconcile. If it does (someone modified it by
+    # hand), failing loudly here beats a surprise merge.
+    pull = _run_git(["pull", "--ff-only"], REPO_DIR)
+    if pull is None or pull.returncode != 0:
+        output_fn("git pull failed.")
+        if pull is not None and pull.stderr.strip():
+            output_fn(pull.stderr.strip())
+        return 1
+
+    output_fn("Reinstalling yt2mp3 and y1sync...")
+    try:
+        install = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade",
+             str(REPO_DIR / "yt2mp3"), str(REPO_DIR / "y1sync")],
+            capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.SubprocessError as exc:
+        output_fn(f"Reinstall failed: {exc}")
+        return 1
+    if install.returncode != 0:
+        output_fn("Reinstall failed.")
+        if install.stderr.strip():
+            output_fn(install.stderr.strip())
+        return 1
+
+    output_fn("\nUpdated. Restart y1sync to use the new version.")
     return 0
 
 
@@ -577,7 +672,8 @@ def cmd_menu(input_fn=input, output_fn=print) -> int:
         output_fn("2. Update player  (find new tracks, then send them over)")
         output_fn("3. Change music folder")
         output_fn("4. Check setup")
-        output_fn("5. Quit")
+        output_fn("5. Check for updates")
+        output_fn("6. Quit")
         reply = input_fn("Choose a number: ").strip()
 
         if reply == "1":
@@ -592,6 +688,9 @@ def cmd_menu(input_fn=input, output_fn=print) -> int:
         elif reply == "4":
             cmd_doctor()
         elif reply == "5":
+            cmd_check_for_updates(input_fn, output_fn)
+            output_fn("— back to the menu —")
+        elif reply == "6":
             return 0
         else:
             output_fn("Enter a number from the list.")

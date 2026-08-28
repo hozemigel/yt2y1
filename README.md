@@ -163,7 +163,8 @@ one for you — no path-typing required. After that, you get a menu:
 2. Update player  (find new tracks, then send them over)
 3. Change music folder
 4. Check setup
-5. Quit
+5. Check for updates
+6. Quit
 ```
 
 Option **4** ("Check setup") is worth running first — it confirms ffmpeg

@@ -27,6 +27,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
   recommended rather than blocking readiness on it.
 - yt2mp3's downloads are more resilient to a slow or flaky connection:
   yt-dlp's socket timeout and retry counts are both raised.
+- **A "Check for updates" menu option.** Fetches the cloned repo, reports
+  how many commits behind origin it is, and offers to pull and reinstall
+  both tools in place. Works with the standard install (see the
+  installers above); a checkout in a different location is told so
+  rather than guessed at.
 
 ## [0.1.0] - 2026-08-28
 

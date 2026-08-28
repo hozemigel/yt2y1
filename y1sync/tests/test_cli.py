@@ -2,6 +2,7 @@ from pathlib import Path
 
 from y1sync.cli import (
     build_parser,
+    cmd_check_for_updates,
     cmd_download_and_sync,
     cmd_menu,
     cmd_scan,
@@ -690,7 +691,7 @@ def test_first_run_prompts_for_a_folder_and_saves_it(tmp_path, monkeypatch):
     music.mkdir()
     monkeypatch.setattr("y1sync.cli.discover_music_folders", lambda root, limit=6: [music])
 
-    replies = iter(["1", "5"])  # pick the discovered folder, then quit
+    replies = iter(["1", "6"])  # pick the discovered folder, then quit
     lines = []
     cmd_menu(input_fn=lambda _: next(replies), output_fn=lines.append)
 
@@ -704,7 +705,7 @@ def test_a_saved_folder_skips_the_first_run_prompt(tmp_path, monkeypatch):
     save_config(Config(music_folder=str(tmp_path)), path)
 
     lines = []
-    cmd_menu(input_fn=lambda _: "5", output_fn=lines.append)
+    cmd_menu(input_fn=lambda _: "6", output_fn=lines.append)
 
     assert not any("Where are your music files?" in line for line in lines)
 
@@ -717,7 +718,7 @@ def test_menu_option_1_offers_the_download_flow(tmp_path, monkeypatch):
     calls = []
     _stub_download(monkeypatch, calls)
 
-    replies = iter(["1", "5"])
+    replies = iter(["1", "6"])
     cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
 
     assert calls == [("download", str(tmp_path))]
@@ -733,7 +734,7 @@ def test_menu_option_2_scans_then_syncs(tmp_path, monkeypatch):
     monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: calls.append(("scan", folder)))
     monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: calls.append(("sync", folder)))
 
-    replies = iter(["2", "5"])
+    replies = iter(["2", "6"])
     cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
 
     assert calls == [("scan", str(tmp_path)), ("sync", str(tmp_path))]
@@ -749,7 +750,7 @@ def test_menu_signals_the_return_to_the_menu_after_an_operation(tmp_path, monkey
     monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: None)
 
     lines = []
-    replies = iter(["2", "5"])
+    replies = iter(["2", "6"])
     cmd_menu(input_fn=lambda _: next(replies), output_fn=lines.append)
 
     assert any("back to the menu" in line for line in lines)
@@ -764,10 +765,28 @@ def test_menu_option_4_checks_setup(tmp_path, monkeypatch):
     _stub_download(monkeypatch, calls)
     monkeypatch.setattr("y1sync.cli.cmd_doctor", lambda: calls.append(("doctor",)))
 
-    replies = iter(["4", "5"])
+    replies = iter(["4", "6"])
     cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
 
     assert calls == [("doctor",)]
+
+
+def test_menu_option_5_checks_for_updates(tmp_path, monkeypatch):
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    calls = []
+    _stub_download(monkeypatch, calls)
+    monkeypatch.setattr(
+        "y1sync.cli.cmd_check_for_updates",
+        lambda *a, **kw: calls.append(("update",)) or 0,
+    )
+
+    replies = iter(["5", "6"])
+    cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert calls == [("update",)]
 
 
 def test_menu_rejects_an_invalid_choice_and_reprompts(tmp_path, monkeypatch):
@@ -776,7 +795,7 @@ def test_menu_rejects_an_invalid_choice_and_reprompts(tmp_path, monkeypatch):
     save_config(Config(music_folder=str(tmp_path)), path)
 
     lines = []
-    replies = iter(["banana", "5"])
+    replies = iter(["banana", "6"])
     result = cmd_menu(input_fn=lambda _: next(replies), output_fn=lines.append)
 
     assert result == 0
@@ -793,7 +812,7 @@ def test_menu_option_3_changes_the_saved_folder(tmp_path, monkeypatch):
     # No discovered folders offered, so option 1 is "enter a path manually".
     monkeypatch.setattr("y1sync.cli.discover_music_folders", lambda root, limit=6: [])
 
-    inputs = iter(["3", "1", str(new_folder), "5"])
+    inputs = iter(["3", "1", str(new_folder), "6"])
     cmd_menu(input_fn=lambda _: next(inputs), output_fn=lambda *a: None)
 
     assert load_config(path).music_folder == str(new_folder)
@@ -1017,3 +1036,169 @@ def test_main_handles_a_keyboard_interrupt_cleanly(monkeypatch, capsys):
 
     assert result == 130
     assert "Cancelled." in capsys.readouterr().out
+
+
+# --- cmd_check_for_updates -------------------------------------------------
+
+
+class _Proc:
+    """Stands in for subprocess.CompletedProcess -- only what cmd_check_for_updates reads."""
+
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _stub_update_repo(tmp_path, monkeypatch):
+    """A folder shaped like the installers' clone, for cmd_check_for_updates."""
+    repo = tmp_path / "yt2y1"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "yt2mp3").mkdir()
+    (repo / "y1sync").mkdir()
+    monkeypatch.setattr("y1sync.cli.REPO_DIR", repo)
+    return repo
+
+
+def test_check_for_updates_reports_a_missing_checkout(tmp_path, monkeypatch):
+    monkeypatch.setattr("y1sync.cli.REPO_DIR", tmp_path / "nope")
+
+    lines = []
+    result = cmd_check_for_updates(input_fn=lambda _: "", output_fn=lines.append)
+
+    assert result == 1
+    assert any("No git checkout" in line for line in lines)
+
+
+def test_check_for_updates_reports_a_failed_fetch(tmp_path, monkeypatch):
+    _stub_update_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "y1sync.cli.subprocess.run",
+        lambda cmd, **kw: _Proc(returncode=1, stderr="network unreachable"),
+    )
+
+    lines = []
+    result = cmd_check_for_updates(input_fn=lambda _: "", output_fn=lines.append)
+
+    assert result == 1
+    assert any("online" in line.lower() for line in lines)
+
+
+def test_check_for_updates_reports_already_up_to_date(tmp_path, monkeypatch):
+    _stub_update_repo(tmp_path, monkeypatch)
+
+    def fake_run(cmd, **kw):
+        if "fetch" in cmd:
+            return _Proc()
+        if "rev-list" in cmd:
+            return _Proc(stdout="0\n")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr("y1sync.cli.subprocess.run", fake_run)
+
+    lines = []
+    result = cmd_check_for_updates(input_fn=lambda _: "", output_fn=lines.append)
+
+    assert result == 0
+    assert any("Already up to date" in line for line in lines)
+
+
+def test_check_for_updates_declines_to_pull_when_the_user_says_no(tmp_path, monkeypatch):
+    _stub_update_repo(tmp_path, monkeypatch)
+
+    def fake_run(cmd, **kw):
+        if "fetch" in cmd:
+            return _Proc()
+        if "rev-list" in cmd:
+            return _Proc(stdout="3\n")
+        if "log" in cmd:
+            return _Proc(stdout="abc123 fix: something\n")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr("y1sync.cli.subprocess.run", fake_run)
+
+    lines = []
+    result = cmd_check_for_updates(input_fn=lambda _: "n", output_fn=lines.append)
+
+    assert result == 0
+    assert any("3 new commits available" in line for line in lines)
+    assert any("Not updating" in line for line in lines)
+
+
+def test_check_for_updates_pulls_and_reinstalls_on_yes(tmp_path, monkeypatch):
+    repo = _stub_update_repo(tmp_path, monkeypatch)
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if "fetch" in cmd:
+            return _Proc()
+        if "rev-list" in cmd:
+            return _Proc(stdout="1\n")
+        if "log" in cmd:
+            return _Proc(stdout="abc123 fix: something\n")
+        if "pull" in cmd:
+            return _Proc()
+        if "pip" in cmd:
+            return _Proc()
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr("y1sync.cli.subprocess.run", fake_run)
+
+    lines = []
+    result = cmd_check_for_updates(input_fn=lambda _: "", output_fn=lines.append)  # Enter -> yes
+
+    assert result == 0
+    assert any("Updated." in line for line in lines)
+    pip_calls = [c for c in calls if "pip" in c]
+    assert len(pip_calls) == 1
+    assert str(repo / "yt2mp3") in pip_calls[0]
+    assert str(repo / "y1sync") in pip_calls[0]
+
+
+def test_check_for_updates_reports_a_failed_pull(tmp_path, monkeypatch):
+    _stub_update_repo(tmp_path, monkeypatch)
+
+    def fake_run(cmd, **kw):
+        if "fetch" in cmd:
+            return _Proc()
+        if "rev-list" in cmd:
+            return _Proc(stdout="1\n")
+        if "log" in cmd:
+            return _Proc(stdout="abc123 fix: something\n")
+        if "pull" in cmd:
+            return _Proc(returncode=1, stderr="conflict")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr("y1sync.cli.subprocess.run", fake_run)
+
+    lines = []
+    result = cmd_check_for_updates(input_fn=lambda _: "y", output_fn=lines.append)
+
+    assert result == 1
+    assert any("git pull failed" in line for line in lines)
+
+
+def test_check_for_updates_reports_a_failed_reinstall(tmp_path, monkeypatch):
+    _stub_update_repo(tmp_path, monkeypatch)
+
+    def fake_run(cmd, **kw):
+        if "fetch" in cmd:
+            return _Proc()
+        if "rev-list" in cmd:
+            return _Proc(stdout="1\n")
+        if "log" in cmd:
+            return _Proc(stdout="abc123 fix: something\n")
+        if "pull" in cmd:
+            return _Proc()
+        if "pip" in cmd:
+            return _Proc(returncode=1, stderr="dependency conflict")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr("y1sync.cli.subprocess.run", fake_run)
+
+    lines = []
+    result = cmd_check_for_updates(input_fn=lambda _: "y", output_fn=lines.append)
+
+    assert result == 1
+    assert any("Reinstall failed" in line for line in lines)
