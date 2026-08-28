@@ -840,7 +840,7 @@ def test_download_reports_a_missing_ffmpeg(monkeypatch):
 
     monkeypatch.setattr(
         "y1sync.cli._load_yt2mp3",
-        lambda: (raise_ffmpeg_missing, FakeFfmpegError, object, lambda opts: 0),
+        lambda: (raise_ffmpeg_missing, FakeFfmpegError, object, lambda opts, files=None: 0),
     )
 
     lines = []
@@ -855,7 +855,7 @@ def test_download_cancels_on_an_empty_url(monkeypatch):
     monkeypatch.setattr(
         "y1sync.cli._load_yt2mp3",
         lambda: (lambda: None, RuntimeError, _FakeDownloadOptions,
-                 lambda opts: downloaded.append(1) or 0),
+                 lambda opts, files=None: downloaded.append(1) or 0),
     )
 
     lines = []
@@ -871,7 +871,7 @@ def test_download_cancels_when_the_url_is_zero(monkeypatch):
     monkeypatch.setattr(
         "y1sync.cli._load_yt2mp3",
         lambda: (lambda: None, RuntimeError, _FakeDownloadOptions,
-                 lambda opts: downloaded.append(1) or 0),
+                 lambda opts, files=None: downloaded.append(1) or 0),
     )
 
     lines = []
@@ -887,7 +887,7 @@ def test_download_cancels_at_the_bitrate_prompt(monkeypatch):
     monkeypatch.setattr(
         "y1sync.cli._load_yt2mp3",
         lambda: (lambda: None, RuntimeError, _FakeDownloadOptions,
-                 lambda opts: downloaded.append(1) or 0),
+                 lambda opts, files=None: downloaded.append(1) or 0),
     )
 
     replies = iter(["https://youtu.be/abc123", "0"])  # url given, then cancel
@@ -904,7 +904,7 @@ def test_download_cancels_at_the_bitrate_prompt(monkeypatch):
 def test_download_bitrate_prompt_reasks_on_a_bad_choice(monkeypatch):
     captured = {}
 
-    def fake_download(opts):
+    def fake_download(opts, downloaded_files=None):
         captured["quality"] = opts.quality
         return 0
 
@@ -926,7 +926,7 @@ def test_download_bitrate_prompt_reasks_on_a_bad_choice(monkeypatch):
 def test_download_passes_the_folder_url_and_quality_through(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_download(opts):
+    def fake_download(opts, downloaded_files=None):
         captured["url"] = opts.url
         captured["output_dir"] = opts.output_dir
         captured["quality"] = opts.quality
@@ -950,7 +950,7 @@ def test_download_passes_the_folder_url_and_quality_through(tmp_path, monkeypatc
 def test_download_defaults_quality_to_320_on_enter(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_download(opts):
+    def fake_download(opts, downloaded_files=None):
         captured["quality"] = opts.quality
         return 0
 
@@ -971,7 +971,7 @@ def test_download_scans_and_syncs_the_folder_after_success(tmp_path, monkeypatch
     calls = []
     monkeypatch.setattr(
         "y1sync.cli._load_yt2mp3",
-        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, lambda opts: 0),
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, lambda opts, files=None: 0),
     )
     monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: calls.append(("scan", folder)))
     monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: calls.append(("sync", folder)))
@@ -986,7 +986,7 @@ def test_download_failure_skips_scan_and_sync(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "y1sync.cli._load_yt2mp3",
-        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, lambda opts: 1),
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, lambda opts, files=None: 1),
     )
     monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: calls.append(("scan", folder)))
     monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: calls.append(("sync", folder)))
@@ -1008,8 +1008,10 @@ def test_download_and_sync_scans_only_the_newly_downloaded_file(tmp_path, monkey
     old.write_bytes(b"old audio")
     new_path = tmp_path / "Kato Feat. Jon - Turn The Lights Off.mp3"
 
-    def fake_download(opts):
+    def fake_download(opts, downloaded_files=None):
         new_path.write_bytes(b"new audio")
+        if downloaded_files is not None:
+            downloaded_files.append(str(new_path))
         return 0
 
     monkeypatch.setattr(
@@ -1024,6 +1026,37 @@ def test_download_and_sync_scans_only_the_newly_downloaded_file(tmp_path, monkey
     cmd_download_and_sync(str(tmp_path), input_fn=lambda _: next(replies), output_fn=lambda *a: None)
 
     assert captured["only"] == {new_path}
+
+
+def test_download_and_sync_scans_a_redownload_of_an_existing_filename(tmp_path, monkeypatch):
+    # Regression test for the actual reported bug: retrying a download that
+    # failed partway through before (or re-fetching a track a second time)
+    # writes to a filename that already exists in the folder. A before/after
+    # directory diff sees no new path there and silently drops the file --
+    # it never gets tagged, never gets reviewed, and ends up on the device
+    # exactly as untagged as it started. only must be built from what
+    # yt2mp3 reports it wrote, not from what's new on disk.
+    existing = tmp_path / "Kato Feat. Jon - Turn The Lights Off.mp3"
+    existing.write_bytes(b"partial audio from an earlier failed attempt")
+
+    def fake_download(opts, downloaded_files=None):
+        existing.write_bytes(b"the complete file, this time")
+        if downloaded_files is not None:
+            downloaded_files.append(str(existing))
+        return 0
+
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, fake_download),
+    )
+    captured = {}
+    monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: captured.update(kw))
+    monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: None)
+
+    replies = iter(["https://youtu.be/abc123", "1"])  # choice 1 -> 320 kbps
+    cmd_download_and_sync(str(tmp_path), input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert captured["only"] == {existing}
 
 
 def test_main_handles_a_keyboard_interrupt_cleanly(monkeypatch, capsys):

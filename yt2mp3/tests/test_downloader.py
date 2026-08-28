@@ -91,3 +91,62 @@ def test_download_returns_nonzero_retcode_from_ydl(monkeypatch):
     rc = download(opts)
 
     assert rc == 1
+
+
+def test_downloaded_files_collects_the_finished_mp3s_path(monkeypatch):
+    # A caller that needs the exact path yt-dlp just wrote (y1sync does, to
+    # tag only the file it just fetched) reads it from here -- not from a
+    # folder listing, which can't tell a freshly written file from one that
+    # already existed under the same name.
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def download(self, urls):
+            # Simulates yt-dlp's own postprocessor chain: a non-mp3 stage
+            # fires first and must be ignored, then the real one.
+            for hook in self.opts["postprocessor_hooks"]:
+                hook({"status": "finished", "info_dict": {"ext": "m4a"}})
+                hook({"status": "finished",
+                      "info_dict": {"ext": "mp3", "filepath": "/music/Song.mp3"}})
+            return 0
+
+    monkeypatch.setattr(downloader_module.yt_dlp, "YoutubeDL", FakeYDL)
+
+    downloaded_files: list[str] = []
+    rc = download(DownloadOptions(url="https://youtu.be/x"), downloaded_files)
+
+    assert rc == 0
+    assert downloaded_files == ["/music/Song.mp3"]
+
+
+def test_downloaded_files_defaults_to_not_collecting(monkeypatch):
+    # download()'s existing callers (yt2mp3's own CLI) don't pass this and
+    # must not be required to -- the hook has to tolerate None.
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def download(self, urls):
+            for hook in self.opts["postprocessor_hooks"]:
+                hook({"status": "finished",
+                      "info_dict": {"ext": "mp3", "filepath": "/music/Song.mp3"}})
+            return 0
+
+    monkeypatch.setattr(downloader_module.yt_dlp, "YoutubeDL", FakeYDL)
+
+    rc = download(DownloadOptions(url="https://youtu.be/x"))
+
+    assert rc == 0

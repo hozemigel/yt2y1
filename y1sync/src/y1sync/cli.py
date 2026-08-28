@@ -326,7 +326,13 @@ def cmd_scan(
 
     files = _find_mp3s(root)
     if only is not None:
-        files = [path for path in files if path in only]
+        # Resolved on both sides before comparing: `only`'s paths come from
+        # yt-dlp's own report of what it wrote, which isn't guaranteed to
+        # share the exact string form -- relative vs. absolute, "./"
+        # segments -- of what rglob() finds below, even when they name the
+        # same file.
+        only_resolved = {path.resolve() for path in only}
+        files = [path for path in files if path.resolve() in only_resolved]
     if not files:
         if only is None:
             print(f"No MP3 files in {root}")
@@ -637,19 +643,26 @@ def cmd_download_and_sync(folder: str, input_fn=input, output_fn=print) -> int:
         output_fn("Cancelled.")
         return 0
 
-    # download() reports only an exit code, not which file(s) it wrote, so
-    # the new file is found by diffing the folder's MP3s before and after.
-    # That set is then the only thing cmd_scan is allowed to touch: without
-    # it, scan would sweep the whole music folder and drag every other
-    # unresolved track in there into review too -- so downloading one song
-    # you'd get asked about some unrelated track already sitting in the
-    # folder, unconnected to what you just came here to do.
-    before = set(_find_mp3s(Path(folder)))
-    exit_code = download(DownloadOptions(url=url, output_dir=folder, quality=quality))
+    # yt2mp3 records the exact path of each MP3 it writes as it goes, so
+    # that's what only is built from -- not a before/after directory
+    # diff. A diff looks like the obvious way to find "the file(s) this
+    # download just produced", but it silently misses a track whose
+    # filename already existed (downloaded once before, or a retry after
+    # an earlier attempt failed partway through): the path was already
+    # there before, so nothing looks new, and the file is skipped
+    # entirely -- never tagged, never sent to review, left on the device
+    # exactly as un-tagged as it was before "Download from YouTube" ever
+    # ran. `only` is what keeps cmd_scan from sweeping the whole music
+    # folder and dragging every other unresolved track in there into
+    # review too.
+    downloaded_files: list[str] = []
+    exit_code = download(
+        DownloadOptions(url=url, output_dir=folder, quality=quality), downloaded_files
+    )
     if exit_code != 0:
         output_fn("Download failed.")
         return exit_code
-    new_files = set(_find_mp3s(Path(folder))) - before
+    new_files = {Path(p) for p in downloaded_files}
 
     cmd_scan(folder, dry_run=False, yes=False, verbose=False, only=new_files)
     cmd_sync(folder, dry_run=False, verbose=False)

@@ -28,21 +28,38 @@ def _progress_hook(d):
         print(f"Downloading: {title}", end="\r")
 
 
-def _postprocessor_hook(d):
-    if d.get("status") == "finished":
-        info = d.get("info_dict", {})
-        # postprocessor_hooks fires once per postprocessor in yt-dlp's chain
-        # (e.g. FFmpegExtractAudio, then an internal file-move step), each with
-        # a snapshot of info_dict taken before that stage ran. Only the stages
-        # that run after conversion see the final .mp3 path, so filter on the
-        # actual extension rather than printing every "finished" event.
-        if info.get("ext") != "mp3":
-            return
-        path = info.get("filepath") or info.get("_filename", "")
-        print(f"Saved: {path}")
+def _make_postprocessor_hook(downloaded_files: list[str] | None):
+    """Build the postprocessor_hooks callback, optionally recording each
+    finished MP3's path into downloaded_files.
+
+    A caller that needs to know exactly what this download produced (y1sync
+    does, to tag only the file it just fetched) can't get that from download()'s
+    return value -- that's just yt-dlp's exit code -- or by comparing a
+    folder listing before and after: if a file with the same name already
+    exists (a track downloaded once before, or retried after an earlier
+    attempt failed partway through), a before/after diff sees no new path
+    and misses it entirely. yt-dlp already knows the exact path for certain,
+    so it's taken from here instead.
+    """
+    def hook(d):
+        if d.get("status") == "finished":
+            info = d.get("info_dict", {})
+            # postprocessor_hooks fires once per postprocessor in yt-dlp's
+            # chain (e.g. FFmpegExtractAudio, then an internal file-move
+            # step), each with a snapshot of info_dict taken before that
+            # stage ran. Only the stages that run after conversion see the
+            # final .mp3 path, so filter on the actual extension rather
+            # than printing every "finished" event.
+            if info.get("ext") != "mp3":
+                return
+            path = info.get("filepath") or info.get("_filename", "")
+            print(f"Saved: {path}")
+            if downloaded_files is not None:
+                downloaded_files.append(path)
+    return hook
 
 
-def build_ydl_opts(opts: DownloadOptions) -> dict:
+def build_ydl_opts(opts: DownloadOptions, downloaded_files: list[str] | None = None) -> dict:
     return {
         "format": "bestaudio/best",
         "outtmpl": os.path.join(opts.output_dir, opts.filename_template),
@@ -54,7 +71,7 @@ def build_ydl_opts(opts: DownloadOptions) -> dict:
             }
         ],
         "progress_hooks": [_progress_hook],
-        "postprocessor_hooks": [_postprocessor_hook],
+        "postprocessor_hooks": [_make_postprocessor_hook(downloaded_files)],
         "ignoreerrors": True,
         "noplaylist": not opts.playlist,
         # yt-dlp's defaults -- a 20s socket timeout, 10 retries -- are
@@ -70,7 +87,9 @@ def build_ydl_opts(opts: DownloadOptions) -> dict:
     }
 
 
-def download(opts: DownloadOptions) -> int:
-    ydl_opts = build_ydl_opts(opts)
+def download(opts: DownloadOptions, downloaded_files: list[str] | None = None) -> int:
+    """Run the download. If downloaded_files is given, each finished MP3's
+    path is appended to it as the download progresses."""
+    ydl_opts = build_ydl_opts(opts, downloaded_files)
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         return ydl.download([opts.url])

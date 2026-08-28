@@ -12,8 +12,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
   download finished, so any other track already sitting there unresolved —
   including one already on the Y1 from before — would surface for review
   too, unconnected to what was just downloaded. It now only tags and syncs
-  the file it just downloaded. "Update player" is unaffected: it still
-  sweeps the whole folder, which is the point there.
+  the file it just downloaded, using the exact path yt2mp3 reports having
+  written rather than comparing a directory listing before and after (that
+  comparison has its own bug: a track downloaded a second time, or retried
+  after an earlier attempt failed partway through, writes to a filename
+  that already exists — a before/after diff sees no new path there and
+  silently drops the file, leaving it untagged with no cover art). "Update
+  player" is unaffected: it still sweeps the whole folder, which is the
+  point there.
 - **Ctrl+C during a review prompt no longer dumps a traceback.** It's now
   caught cleanly and prints "Cancelled."
 
