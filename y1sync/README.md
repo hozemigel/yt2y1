@@ -149,6 +149,13 @@ the original album, on compilations, and on remasters. So:
 that track, and accepting one unseen is how a library ends up with the
 wrong artist. Those tracks are left untagged and listed at the end.
 
+When fingerprinting draws a blank — which happens most for obscure and
+independent tracks — `y1sync` looks for a `.yt2mp3.json` sidecar left by
+`yt2mp3` and identifies from that (a MusicBrainz search for the real
+release, seeded with YouTube's own artist and title) rather than from the
+filename. It's still shown for review; only a fingerprint match is ever
+applied automatically.
+
 Add `--dry-run` to `scan` or `sync` to see what would change without
 writing anything:
 

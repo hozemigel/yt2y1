@@ -4,7 +4,9 @@ Download music from YouTube and get it onto an [Innioasis Y1](https://www.innioa
 
 Two small tools, each doing one job:
 
-- **[yt2mp3](yt2mp3/)** — download a YouTube video or playlist as MP3.
+- **[yt2mp3](yt2mp3/)** — download a YouTube video or playlist as MP3,
+  and drop a small `.yt2mp3.json` sidecar of what YouTube said the track
+  was next to each file.
 - **[y1sync](y1sync/)** — identify, tag, and sync a music library to the Y1 by audio fingerprint rather than filename, so a mislabeled download doesn't end up mislabeled on the device.
 
 `y1sync` can also drive `yt2mp3` for you from its own menu, so in practice

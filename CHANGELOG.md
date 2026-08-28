@@ -49,6 +49,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
   caught cleanly and prints "Cancelled."
 
 ### Added
+- **A track the fingerprint can't place is now identified from what
+  YouTube said it was, not just its filename.** `yt2mp3` writes a small
+  `<name>.yt2mp3.json` beside each download holding the artist, title,
+  album and year yt-dlp pulled from the video (a YouTube Music "- Topic"
+  channel, or the "Provided to YouTube by" block in the description).
+  When AcoustID returns no match — common for lesser-known and
+  independent tracks — `y1sync` uses that to text-search MusicBrainz for
+  the real release and to seed the iTunes lookup, instead of guessing
+  from a noisy filename. The result still goes to review and `--yes`
+  still refuses it: nothing but a fingerprint is applied unseen. No
+  sidecar (a hand-managed library, or a file downloaded another way)
+  means the old filename behaviour, unchanged.
 - **The installers now set up deno**, a JS runtime yt-dlp uses for
   reliable YouTube extraction. Without one, downloads fall back to a
   slower, more failure-prone path — seen for real as repeated read

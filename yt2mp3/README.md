@@ -56,6 +56,15 @@ If you actually want a playlist, pass `--playlist` explicitly:
 yt2mp3 "https://www.youtube.com/playlist?list=PLxxxxxxxx" --playlist
 ```
 
+## The metadata sidecar
+
+Next to every MP3 it writes, `yt2mp3` leaves a `<name>.yt2mp3.json` file
+with the artist, title, album and year yt-dlp extracted from the video.
+It costs nothing if you don't use it, and it's what lets `y1sync`
+identify a track that audio fingerprinting can't place without falling
+back to guessing from the filename. Delete them freely; they're
+regenerated on the next download.
+
 ## Licence
 
 MIT
