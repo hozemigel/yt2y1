@@ -372,7 +372,12 @@ def cmd_scan(
                     # even this track, and accepting it unseen reproduces
                     # the misidentification this tool exists to prevent.
                     unconfirmed.append(f"{path.name} -> {pick.meta.artist} - {pick.meta.title}")
-                    print(f"  needs review  {path.name} (identified from its filename)")
+                    why = (
+                        "identified from the YouTube page, not its audio"
+                        if pick.source == "youtube"
+                        else "identified from its filename"
+                    )
+                    print(f"  needs review  {path.name} ({why})")
                     continue
                 if needs_review and yes and length_mismatch(pick, file_length):
                     # Same reasoning: a fingerprint match against a

@@ -555,6 +555,14 @@ def _guess_candidate(artist="Counting Crows", title="American Girls"):
     )
 
 
+def _youtube_guess():
+    return Candidate(
+        meta=TrackMeta(artist="Some DIY Act", title="Basement Tape", album="EP"),
+        confidence=0.0, source="youtube", release_group_type="Album",
+        release_status="Official", release_date=None,
+    )
+
+
 def _two_guesses():
     return [_guess_candidate(), _guess_candidate("Harry Styles", "American Girls")]
 
@@ -612,6 +620,20 @@ def test_yes_still_accepts_a_fingerprinted_track(tmp_path, capsys, monkeypatch):
     assert "would tag and rename" in out
     # And it says which ambiguous choice it made on the user's behalf.
     assert "Hot Shot" in out
+
+
+def test_yes_refuses_a_youtube_sourced_pick(tmp_path, capsys, monkeypatch):
+    (tmp_path / "basement tape.mp3").write_bytes(b"one")
+    monkeypatch.setattr("y1sync.cli.identify",
+                        lambda p, api_key=None, session=None: [_youtube_guess()])
+    monkeypatch.setattr("y1sync.cli.CACHE_ROOT", tmp_path / "cache")
+
+    main(["scan", str(tmp_path), "--dry-run", "--yes"])
+    out = capsys.readouterr().out.lower()
+
+    assert "needs review" in out
+    assert "youtube page" in out
+    assert "would tag and rename" not in out
 
 
 # --- discover_music_folders ---------------------------------------------

@@ -196,6 +196,28 @@ def test_a_rows_year_and_type_are_shown_but_not_the_repeated_title():
     assert "Wonderful Life" not in row  # only in the group header, above
 
 
+def test_a_youtube_sourced_top_option_is_labelled_from_the_youtube_page():
+    lines = []
+    cand = Candidate(
+        meta=TrackMeta(artist="SZA", title="Snooze", album="SOS", year="2022"),
+        confidence=0.0, source="youtube", release_group_type="Album",
+        release_status="Official", release_date=None,
+    )
+    choose_candidate(Path("snooze.mp3"), [cand],
+                     input_fn=lambda _: "", output_fn=lines.append)
+    assert any(
+        "From the YouTube page: SZA — Snooze (SOS, 2022)" in line
+        for line in lines
+    )
+
+
+def test_no_youtube_line_for_a_fingerprint_match():
+    lines = []
+    choose_candidate(Path("f.mp3"), [cand("Rumours")],
+                     input_fn=lambda _: "", output_fn=lines.append)
+    assert not any("From the YouTube page" in line for line in lines)
+
+
 def test_the_header_says_one_match_for_a_single_candidate():
     lines = []
     choose_candidate(Path("f.mp3"), [cand("Rumours")], input_fn=lambda _: "s",

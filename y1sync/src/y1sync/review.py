@@ -125,6 +125,14 @@ def choose_candidate(
     output_fn(f"\n{header}")
     output_fn(f"  {Path(path).name}")
 
+    if ranked and ranked[0].source == "youtube":
+        top = ranked[0]
+        detail = ", ".join(part for part in (top.meta.album, top.meta.year) if part)
+        suffix = f" ({detail})" if detail else ""
+        output_fn(
+            f"  From the YouTube page: {top.meta.artist} — {top.meta.title}{suffix}"
+        )
+
     stem = Path(path).stem
     titles = {candidate.meta.title for candidate in ranked if candidate.meta.title}
     if titles and not any(_matches_filename(title, stem) for title in titles):
