@@ -674,6 +674,22 @@ def test_menu_option_2_scans_then_syncs(tmp_path, monkeypatch):
     assert calls == [("scan", str(tmp_path)), ("sync", str(tmp_path))]
 
 
+def test_menu_signals_the_return_to_the_menu_after_an_operation(tmp_path, monkeypatch):
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    _stub_download(monkeypatch, [])
+    monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: None)
+    monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: None)
+
+    lines = []
+    replies = iter(["2", "5"])
+    cmd_menu(input_fn=lambda _: next(replies), output_fn=lines.append)
+
+    assert any("back to the menu" in line for line in lines)
+
+
 def test_menu_option_4_checks_setup(tmp_path, monkeypatch):
     path = _config_path(tmp_path)
     monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
@@ -750,17 +766,77 @@ def test_download_reports_a_missing_ffmpeg(monkeypatch):
     assert any("ffmpeg not found" in line for line in lines)
 
 
-def test_download_rejects_an_empty_url(monkeypatch):
+def test_download_cancels_on_an_empty_url(monkeypatch):
+    downloaded = []
     monkeypatch.setattr(
         "y1sync.cli._load_yt2mp3",
-        lambda: (lambda: None, RuntimeError, object, lambda opts: 0),
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions,
+                 lambda opts: downloaded.append(1) or 0),
     )
 
     lines = []
     result = cmd_download_and_sync("/music", input_fn=lambda _: "", output_fn=lines.append)
 
-    assert result == 1
-    assert any("No URL entered" in line for line in lines)
+    assert result == 0  # cancelling is not an error
+    assert downloaded == []  # never reached the download
+    assert any("Cancelled" in line for line in lines)
+
+
+def test_download_cancels_when_the_url_is_zero(monkeypatch):
+    downloaded = []
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions,
+                 lambda opts: downloaded.append(1) or 0),
+    )
+
+    lines = []
+    result = cmd_download_and_sync("/music", input_fn=lambda _: "0", output_fn=lines.append)
+
+    assert result == 0
+    assert downloaded == []
+    assert any("Cancelled" in line for line in lines)
+
+
+def test_download_cancels_at_the_bitrate_prompt(monkeypatch):
+    downloaded = []
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions,
+                 lambda opts: downloaded.append(1) or 0),
+    )
+
+    replies = iter(["https://youtu.be/abc123", "0"])  # url given, then cancel
+    lines = []
+    result = cmd_download_and_sync(
+        "/music", input_fn=lambda _: next(replies), output_fn=lines.append
+    )
+
+    assert result == 0
+    assert downloaded == []
+    assert any("Cancelled" in line for line in lines)
+
+
+def test_download_bitrate_prompt_reasks_on_a_bad_choice(monkeypatch):
+    captured = {}
+
+    def fake_download(opts):
+        captured["quality"] = opts.quality
+        return 0
+
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, fake_download),
+    )
+    monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: None)
+    monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: None)
+
+    replies = iter(["https://youtu.be/abc123", "9", "banana", "3"])  # 3 -> 192 kbps
+    lines = []
+    cmd_download_and_sync("/music", input_fn=lambda _: next(replies), output_fn=lines.append)
+
+    assert captured["quality"] == "192"
+    assert any("Enter 1-4" in line for line in lines)
 
 
 def test_download_passes_the_folder_url_and_quality_through(tmp_path, monkeypatch):
@@ -779,7 +855,7 @@ def test_download_passes_the_folder_url_and_quality_through(tmp_path, monkeypatc
     monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: None)
     monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: None)
 
-    replies = iter(["https://youtu.be/abc123", "256"])
+    replies = iter(["https://youtu.be/abc123", "2"])  # choice 2 -> 256 kbps
     cmd_download_and_sync(str(tmp_path), input_fn=lambda _: next(replies), output_fn=lambda *a: None)
 
     assert captured["url"] == "https://youtu.be/abc123"
@@ -816,7 +892,7 @@ def test_download_scans_and_syncs_the_folder_after_success(tmp_path, monkeypatch
     monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: calls.append(("scan", folder)))
     monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: calls.append(("sync", folder)))
 
-    replies = iter(["https://youtu.be/abc123", "320"])
+    replies = iter(["https://youtu.be/abc123", "1"])  # choice 1 -> 320 kbps
     cmd_download_and_sync(str(tmp_path), input_fn=lambda _: next(replies), output_fn=lambda *a: None)
 
     assert calls == [("scan", str(tmp_path)), ("sync", str(tmp_path))]
@@ -831,7 +907,7 @@ def test_download_failure_skips_scan_and_sync(tmp_path, monkeypatch):
     monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: calls.append(("scan", folder)))
     monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: calls.append(("sync", folder)))
 
-    replies = iter(["https://youtu.be/abc123", "320"])
+    replies = iter(["https://youtu.be/abc123", "1"])  # choice 1 -> 320 kbps
     result = cmd_download_and_sync(
         str(tmp_path), input_fn=lambda _: next(replies), output_fn=lambda *a: None
     )

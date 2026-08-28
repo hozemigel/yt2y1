@@ -464,11 +464,39 @@ def _load_yt2mp3():
     return ensure_ffmpeg, FfmpegNotFoundError, DownloadOptions, download
 
 
+# Bitrate menu: (label, kbps passed to yt2mp3), best first. The list
+# position is the choice number; "0" cancels, Enter takes the first.
+_BITRATE_OPTIONS = [
+    ("320 kbps  (best, default)", "320"),
+    ("256 kbps", "256"),
+    ("192 kbps", "192"),
+    ("128 kbps  (smallest files)", "128"),
+]
+
+
+def _prompt_bitrate(input_fn=input, output_fn=print) -> str | None:
+    """Ask for an MP3 bitrate. Returns the kbps string, or None if cancelled."""
+    while True:
+        output_fn("Bitrate:")
+        for index, (label, _kbps) in enumerate(_BITRATE_OPTIONS, start=1):
+            output_fn(f"  {index}. {label}")
+        output_fn("  0. Cancel")
+        reply = input_fn("Choose a number [1]: ").strip()
+        if reply == "":
+            return _BITRATE_OPTIONS[0][1]
+        if reply == "0":
+            return None
+        if reply.isdigit() and 1 <= int(reply) <= len(_BITRATE_OPTIONS):
+            return _BITRATE_OPTIONS[int(reply) - 1][1]
+        output_fn(f"Enter 1-{len(_BITRATE_OPTIONS)}, or 0 to cancel.")
+
+
 def cmd_download_and_sync(folder: str, input_fn=input, output_fn=print) -> int:
     """Download a YouTube URL into folder via yt2mp3, then tag and sync it.
 
     The full flow in one menu choice: download, identify and tag, send to
     the device -- rather than requiring yt2mp3 and y1sync run separately.
+    Cancelling at either prompt returns to the menu without downloading.
     """
     loaded = _load_yt2mp3()
     if loaded is None:
@@ -482,11 +510,15 @@ def cmd_download_and_sync(folder: str, input_fn=input, output_fn=print) -> int:
         output_fn(str(exc))
         return 1
 
-    url = input_fn("YouTube URL: ").strip()
-    if not url:
-        output_fn("No URL entered.")
-        return 1
-    quality = input_fn("Bitrate in kbps [320]: ").strip() or "320"
+    url = input_fn("YouTube URL (or 0 to cancel): ").strip()
+    if url in ("", "0"):
+        output_fn("Cancelled.")
+        return 0
+
+    quality = _prompt_bitrate(input_fn, output_fn)
+    if quality is None:
+        output_fn("Cancelled.")
+        return 0
 
     exit_code = download(DownloadOptions(url=url, output_dir=folder, quality=quality))
     if exit_code != 0:
@@ -519,9 +551,11 @@ def cmd_menu(input_fn=input, output_fn=print) -> int:
 
         if reply == "1":
             cmd_download_and_sync(folder, input_fn, output_fn)
+            output_fn("— back to the menu —")
         elif reply == "2":
             cmd_scan(folder, dry_run=False, yes=False, verbose=False)
             cmd_sync(folder, dry_run=False, verbose=False)
+            output_fn("— back to the menu —")
         elif reply == "3":
             folder = _prompt_for_music_folder(input_fn, output_fn)
         elif reply == "4":
