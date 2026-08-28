@@ -1,10 +1,19 @@
 from pathlib import Path
 import pytest
 from y1sync.identify import (
-    ACOUSTID_ENDPOINT, ITUNES_ENDPOINT, MUSICBRAINZ_ENDPOINT,
-    AcoustIDKeyRejected, guess_query_from_filename, identify,
+    ACOUSTID_ENDPOINT, BUNDLED_ACOUSTID_KEY, ITUNES_ENDPOINT, MUSICBRAINZ_ENDPOINT,
+    AcoustIDKeyRejected, acoustid_key, guess_query_from_filename, identify,
     parse_itunes_response, parse_acoustid_response,
 )
+
+
+def test_acoustid_key_falls_back_to_the_bundled_one():
+    # The lookup endpoint authenticates the application, not the user, so
+    # a key shipped with the tool is all a read-only client needs.
+    assert acoustid_key(None) == BUNDLED_ACOUSTID_KEY
+    assert acoustid_key("") == BUNDLED_ACOUSTID_KEY
+    assert acoustid_key("mine") == "mine"
+    assert BUNDLED_ACOUSTID_KEY  # a real key is actually shipped
 
 
 def test_strips_youtube_suffixes():

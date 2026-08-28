@@ -6,9 +6,10 @@
 #
 # It installs winget itself if missing, then Python, Git, ffmpeg and
 # chromaprint, clones (or updates) yt2y1 into %USERPROFILE%\yt2y1, installs
-# both tools, walks you through the free AcoustID key, and finishes with
-# `y1sync doctor` so you can see everything is actually ready. ffmpeg falls
-# back to a direct download if winget's own package doesn't take.
+# both tools, and finishes with `y1sync doctor` so you can see everything
+# is actually ready. Audio fingerprinting needs no key or signup: y1sync
+# ships with its own AcoustID lookup key. ffmpeg falls back to a direct
+# download if winget's own package doesn't take.
 #
 # Safe to run more than once -- each step is skipped if it's already done.
 
@@ -272,48 +273,7 @@ if ($userSite) {
     }
 }
 
-# --- 8. AcoustID key -------------------------------------------------------
-
-$configDir = Join-Path $env:USERPROFILE ".config\y1sync"
-$configFile = Join-Path $configDir "config.toml"
-New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-
-$hasKey = (Test-Path $configFile) -and
-          ((Get-Content $configFile -Raw) -match 'acoustid_key\s*=\s*"[^"]+"')
-
-if ($hasKey) {
-    Write-Step "AcoustID key already configured, skipping."
-} else {
-    Write-Step "Setting up your free AcoustID key..."
-    Write-Host "AcoustID is a free, open audio-fingerprinting lookup -- the same idea"
-    Write-Host "as Shazam. It's what lets y1sync identify each track from its actual"
-    Write-Host "audio instead of guessing from a messy YouTube filename. Getting a key"
-    Write-Host "is free and takes about two minutes; opening the signup page now."
-    Write-Host ""
-    Write-Host "On that page: log in (a Google or GitHub account works), fill in a Name" -ForegroundColor Yellow
-    Write-Host "and Version for the form, submit, then copy the API key it shows you." -ForegroundColor Yellow
-    Write-Host ""
-    Start-Process "https://acoustid.org/new-application"
-
-    $key = ""
-    while ([string]::IsNullOrWhiteSpace($key)) {
-        $key = Read-Host "Paste your AcoustID application key here"
-    }
-    # Routed through y1sync's own save_config rather than writing the file
-    # directly: WriteAllText would blank the file, discarding music_folder
-    # if "Change music folder" had already been run once. save_config()
-    # reads the existing file back first and only overwrites acoustid_key.
-    # The key travels via an environment variable, not string interpolation
-    # into the Python command, since it's pasted from a web page and may
-    # contain characters that would need careful escaping otherwise.
-    $env:Y1SYNC_ACOUSTID_KEY = $key
-    python -c "import os; from y1sync.config import Config, save_config; save_config(Config(acoustid_key=os.environ['Y1SYNC_ACOUSTID_KEY']))"
-    Remove-Item Env:\Y1SYNC_ACOUSTID_KEY
-    if ($LASTEXITCODE -ne 0) { throw "Saving the AcoustID key failed." }
-    Write-Host "Saved to $configFile"
-}
-
-# --- 9. Confirm everything is ready --------------------------------------
+# --- 8. Confirm everything is ready --------------------------------------
 
 Update-SessionPath
 Write-Step "Checking everything is ready..."

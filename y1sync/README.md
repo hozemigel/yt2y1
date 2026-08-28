@@ -27,8 +27,10 @@ not guess.
 
 - **Python 3.10+**
 - **ffmpeg** and **chromaprint** (`fpcalc`) — see [Setting up fingerprinting](#setting-up-fingerprinting) below
-- A free **AcoustID application key** — same section
 - To actually copy files to the device: the Y1 connected over USB and mounted as a drive (Windows/macOS/Linux all do this automatically)
+
+The AcoustID lookup used to identify tracks needs no account or key of
+your own — one is built in. See [Setting up fingerprinting](#setting-up-fingerprinting).
 
 ## Install
 
@@ -52,7 +54,9 @@ install yt2mp3 if you pick it before it's there.
 
 ### Setting up fingerprinting
 
-Fingerprinting is what makes y1sync accurate, and it needs three things.
+Fingerprinting is what makes y1sync accurate, and it needs two tools
+installed. The AcoustID lookup itself needs nothing set up — see the note
+after chromaprint.
 
 **1. ffmpeg**, used to decode audio:
 
@@ -74,27 +78,25 @@ brew install chromaprint                 # macOS
 Windows: grab the `fpcalc` build from [acoustid.org/chromaprint](https://acoustid.org/chromaprint)
 and add its folder to your PATH too.
 
-**3. An AcoustID *application* key.**
-
-AcoustID issues two different keys and it is easy to take the wrong one.
-The page at `acoustid.org/api-key`, headed *"Your API Key"*, gives a key
-for **submitting** fingerprints — it will not work here, and the service
-answers `invalid API key`.
-
-The key you need comes from **[acoustid.org/new-application](https://acoustid.org/new-application)**.
-That page shows a short form rather than a key: fill in a name and
-version, register, and the key then appears under *My Applications*.
+**The AcoustID key: nothing to do.** AcoustID's lookup API authenticates
+the *application*, not the user, and has no per-user key — so y1sync
+ships with its own and fingerprinting works with no signup. If that key
+is ever rate-limited or withdrawn, register your own application at
+[acoustid.org/new-application](https://acoustid.org/new-application) (a
+short form, not the *"Your API Key"* page — that one is for *submitting*
+fingerprints and will not work here) and point y1sync at it:
 
 ```toml
 # ~/.config/y1sync/config.toml
 acoustid_key = "your-application-key"
 ```
 
-Run `y1sync doctor` to confirm both are found.
+Run `y1sync doctor` to confirm ffmpeg and chromaprint are found.
 
-y1sync still works without either. It falls back to guessing from the
+y1sync still works without them. It falls back to guessing from the
 filename, and every track then goes through review — which is roughly
-what tagging by hand costs, so it is worth the five minutes of setup.
+what tagging by hand costs, so the few minutes to install them is worth
+it.
 
 ## Use
 

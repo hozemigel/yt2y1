@@ -132,6 +132,36 @@ def test_scan_dry_run_does_not_write_cache(tmp_path, capsys, monkeypatch):
     assert not list(identify_cache.glob("*.json"))
 
 
+def test_scan_gives_identify_the_bundled_key_when_config_has_none(tmp_path, monkeypatch):
+    from y1sync.identify import BUNDLED_ACOUSTID_KEY
+
+    (tmp_path / "song.mp3").write_bytes(b"audio")
+    seen = []
+    monkeypatch.setattr(
+        "y1sync.cli.identify",
+        lambda p, api_key=None, session=None: seen.append(api_key) or [_confident_candidate()],
+    )
+    monkeypatch.setattr("y1sync.cli.load_config", lambda: Config(acoustid_key=None))
+    monkeypatch.setattr("y1sync.cli.CACHE_ROOT", tmp_path / "cache")
+
+    assert main(["scan", str(tmp_path), "--dry-run"]) == 0
+    assert seen == [BUNDLED_ACOUSTID_KEY]
+
+
+def test_scan_prefers_a_configured_key_over_the_bundled_one(tmp_path, monkeypatch):
+    (tmp_path / "song.mp3").write_bytes(b"audio")
+    seen = []
+    monkeypatch.setattr(
+        "y1sync.cli.identify",
+        lambda p, api_key=None, session=None: seen.append(api_key) or [_confident_candidate()],
+    )
+    monkeypatch.setattr("y1sync.cli.load_config", lambda: Config(acoustid_key="my-own-key"))
+    monkeypatch.setattr("y1sync.cli.CACHE_ROOT", tmp_path / "cache")
+
+    assert main(["scan", str(tmp_path), "--dry-run"]) == 0
+    assert seen == ["my-own-key"]
+
+
 def _stub_scan_side_effects(monkeypatch, tmp_path, candidate=None):
     """Neutralise everything scan does except identification and renaming."""
     pick = candidate or _confident_candidate()
@@ -244,18 +274,33 @@ def test_doctor_marks_every_present_tool_with_a_checkmark(capsys, monkeypatch):
     _stub_doctor_environment(monkeypatch)
     main(["doctor"])
     out = capsys.readouterr().out
-    assert out.count("✓") == 3  # ffmpeg, chromaprint, AcoustID key -- not the device
+    assert out.count("✓") == 2  # ffmpeg and chromaprint -- not the device
     assert "✗" in out  # the device, since none was stubbed in
 
 
 def test_doctor_shows_a_hint_only_for_a_missing_item(capsys, monkeypatch):
+    _stub_doctor_environment(monkeypatch, ffmpeg=False)
+    main(["doctor"])
+    out = capsys.readouterr().out
+    # The missing tool carries its parenthetical hint...
+    assert "✗ ffmpeg  (" in out
+    # ...and the present one does not.
+    assert "✓ chromaprint\n" in out
+
+
+def test_doctor_notes_the_built_in_acoustid_key_when_none_is_configured(capsys, monkeypatch):
     _stub_doctor_environment(monkeypatch, key=None)
     main(["doctor"])
     out = capsys.readouterr().out
-    assert "✗ AcoustID key" in out
-    assert "acoustid.org/new-application" in out
-    # ffmpeg is present, so its line must not carry a parenthetical hint.
-    assert "✓ ffmpeg\n" in out
+    assert "built-in key" in out
+    assert "You're ready" in out  # a key is no longer a prerequisite
+
+
+def test_doctor_notes_a_configured_acoustid_key(capsys, monkeypatch):
+    _stub_doctor_environment(monkeypatch, key="my-own-key")
+    main(["doctor"])
+    out = capsys.readouterr().out
+    assert "using the key set in your config" in out
 
 
 def test_doctor_says_ready_when_everything_is_present(capsys, monkeypatch):

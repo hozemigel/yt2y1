@@ -22,9 +22,10 @@
 # virtual environment shared between them -- so y1sync's "Download from
 # YouTube" menu option can still import yt2mp3, and so this doesn't run
 # into Homebrew's Python refusing a bare "pip install" outside a venv
-# (PEP 668) -- symlinks y1sync and yt2mp3 onto your PATH, walks you
-# through the free AcoustID key, and finishes with `y1sync doctor` so
-# you can see everything is actually ready.
+# (PEP 668) -- symlinks y1sync and yt2mp3 onto your PATH, and finishes
+# with `y1sync doctor` so you can see everything is actually ready.
+# Audio fingerprinting needs no key or signup: y1sync ships with its own
+# AcoustID lookup key.
 #
 # Homebrew-only by design, the same way install-windows.ps1 is
 # winget-only and install-linux.sh is apt-only: it's what the README
@@ -171,56 +172,7 @@ esac
 # reliably has something to do the first time.
 ensure_line_in_rc "export PATH=\"$BIN_DIR:\$PATH\""
 
-# --- 8. AcoustID key -------------------------------------------------------
-
-write_step "Setting up your free AcoustID key..."
-
-CONFIG_FILE="$HOME/.config/y1sync/config.toml"
-has_key=false
-if [ -f "$CONFIG_FILE" ] && grep -Eq 'acoustid_key[[:space:]]*=[[:space:]]*"[^"]+"' "$CONFIG_FILE"; then
-    has_key=true
-fi
-
-if [ "$has_key" = true ]; then
-    echo "  Already configured, skipping."
-else
-    echo "AcoustID is a free, open audio-fingerprinting lookup -- the same idea"
-    echo "as Shazam. It's what lets y1sync identify each track from its actual"
-    echo "audio instead of guessing from a messy YouTube filename. Getting a key"
-    echo "is free and takes about two minutes; opening the signup page now."
-    echo ""
-    echo -e "\033[33mOn that page: log in (a Google or GitHub account works), fill in a Name\033[0m"
-    echo -e "\033[33mand Version for the form, submit, then copy the API key it shows you.\033[0m"
-    echo ""
-
-    open "https://acoustid.org/new-application"
-
-    key=""
-    while [ -z "$key" ]; do
-        # Explicitly from /dev/tty, not plain stdin: kept as a defensive
-        # habit even though the documented bash -c "$(curl ...)" invocation
-        # above already leaves stdin free -- a bare "read" here would
-        # misbehave the same way the apt/brew step above did if this ever
-        # runs under a plain "curl ... | bash" pipe instead.
-        read -r -p "Paste your AcoustID application key here: " key < /dev/tty
-    done
-
-    # Routed through y1sync's own save_config() rather than writing the
-    # file directly: that would blank the whole file, discarding
-    # music_folder if it had already been set. save_config() reads the
-    # existing file back first and only overwrites acoustid_key. The key
-    # travels via an environment variable, not string interpolation into
-    # the Python command, since it's pasted from a web page and may
-    # contain characters that would need careful escaping otherwise.
-    Y1SYNC_ACOUSTID_KEY="$key" "$VENV_DIR/bin/python" -c '
-import os
-from y1sync.config import Config, save_config
-save_config(Config(acoustid_key=os.environ["Y1SYNC_ACOUSTID_KEY"]))
-'
-    echo "Saved to $CONFIG_FILE"
-fi
-
-# --- 9. Confirm everything is ready ---------------------------------------
+# --- 8. Confirm everything is ready ---------------------------------------
 
 write_step "Checking everything is ready..."
 y1sync doctor

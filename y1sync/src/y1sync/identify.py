@@ -14,6 +14,16 @@ ITUNES_ENDPOINT = "https://itunes.apple.com/search"
 ACOUSTID_ENDPOINT = "https://api.acoustid.org/v2/lookup"
 MUSICBRAINZ_ENDPOINT = "https://musicbrainz.org/ws/2/recording"
 
+# A lookup-only AcoustID application key, shipped with y1sync so a fresh
+# install can fingerprint straight away. AcoustID's lookup endpoint
+# authenticates the *application*, not the user, and has no per-user key
+# parameter (see acoustid.org/webservice#lookup), so one shared key is
+# all a read-only client can use -- and it spares every user the
+# two-minute application registration that used to be a required install
+# step. A key in config.toml still wins, as an escape hatch if this one
+# is ever rate-limited or withdrawn.
+BUNDLED_ACOUSTID_KEY = "BJptTZcYbC"
+
 # MusicBrainz asks unauthenticated clients for one request per second and
 # a User-Agent that identifies the application.
 MUSICBRAINZ_USER_AGENT = "y1sync/0.1 (https://github.com/hozemigel/yt2y1)"
@@ -47,6 +57,11 @@ NOISE_PATTERN = re.compile(
     r"|\[[^\]]*\b(?:official|lyrics?|audio|video)\b[^\]]*\]",
     re.IGNORECASE,
 )
+
+
+def acoustid_key(configured: str | None) -> str | None:
+    """The AcoustID key to use: the user's if set, otherwise the bundled one."""
+    return configured or BUNDLED_ACOUSTID_KEY or None
 
 
 def guess_query_from_filename(path: Path) -> str:
@@ -153,11 +168,12 @@ def _raise_if_key_rejected(payload: dict) -> None:
     error = payload.get("error") or {}
     if error.get("code") in _KEY_ERROR_CODES:
         raise AcoustIDKeyRejected(
-            f"AcoustID rejected the configured key: {error.get('message', 'invalid')}. "
+            f"AcoustID rejected the key in use: {error.get('message', 'invalid')}. "
             "Fingerprinting is unavailable, so tracks would be identified from "
-            "their filenames alone. Get an application key at "
-            "https://acoustid.org/new-application and set acoustid_key in "
-            "~/.config/y1sync/config.toml"
+            "their filenames alone. If you have not set your own key, y1sync's "
+            "built-in one may have been rate-limited or withdrawn -- get a free "
+            "application key at https://acoustid.org/new-application and set "
+            "acoustid_key in ~/.config/y1sync/config.toml"
         )
 
 

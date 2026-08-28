@@ -12,7 +12,7 @@ from .artwork import artwork_url_for, fetch_artwork
 from .cache import ContentCache
 from .config import Config, load_config, save_config
 from .device import backup_device, find_devices, needs_copy, safe_copy
-from .identify import AcoustIDKeyRejected, identify
+from .identify import AcoustIDKeyRejected, acoustid_key, identify
 from .naming import rename_file, resolve_collision, safe_filename
 from .ranking import decide, length_mismatch
 from .review import choose_candidate
@@ -118,13 +118,15 @@ def cmd_doctor() -> int:
     device = devices[0] if devices else None
 
     # (label, present, hint shown only when missing)
+    #
+    # The AcoustID key is no longer on this list: y1sync ships with one, so
+    # fingerprinting needs only ffmpeg and chromaprint installed. A bad key
+    # is now surfaced by scan itself, not pre-checked here.
     checks = [
         ("ffmpeg", bool(ffmpeg_found),
          "needed to decode audio -- see the README for install steps"),
         ("chromaprint", bool(fpcalc_found),
          "needed for accurate song matching -- see the README"),
-        ("AcoustID key", bool(config.acoustid_key),
-         "free, 2 minutes: https://acoustid.org/new-application"),
         ("Y1 player", bool(device),
          "not connected"),
     ]
@@ -134,12 +136,17 @@ def cmd_doctor() -> int:
         mark = "✓" if present else "✗"
         print(f"  {mark} {label}" + (f"  ({hint})" if not present else ""))
 
+    if config.acoustid_key:
+        print("\n  AcoustID: using the key set in your config.")
+    else:
+        print("\n  AcoustID: using y1sync's built-in key -- nothing to set up.")
+
     print()
     # Whether the device happens to be plugged in right now doesn't affect
     # whether the software side is ready -- that's checked separately by
     # sync itself, and nagging about it here would read as an error on
     # every run before you've connected the player at all.
-    ready = ffmpeg_found and fpcalc_found and bool(config.acoustid_key)
+    ready = bool(ffmpeg_found) and bool(fpcalc_found)
     if ready and device:
         print(f"You're ready -- the Y1 is connected at {device}. "
               'Choose "Update player" from the menu.')
@@ -147,7 +154,7 @@ def cmd_doctor() -> int:
         print('You\'re ready. Connect the Y1 over USB, then choose '
               '"Update player" from the menu.')
     else:
-        first_missing = next(label for label, present, _ in checks[:3] if not present)
+        first_missing = next(label for label, present, _ in checks[:2] if not present)
         print(f"Almost there -- fix {first_missing} above, then run this again.")
 
     # Identifications and the answers to review questions are remembered
@@ -209,6 +216,7 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
         return 0
 
     config = load_config()
+    api_key = acoustid_key(config.acoustid_key)
     cache = ContentCache(CACHE_ROOT / "identify")
     auto_accepted: list[str] = []
     unconfirmed: list[str] = []
@@ -226,7 +234,7 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
         try:
             entry = cache.get(path)
             if entry is None:
-                candidates = identify(path, config.acoustid_key)
+                candidates = identify(path, api_key)
                 pick = None
             else:
                 candidates, pick = entry.candidates, entry.choice
