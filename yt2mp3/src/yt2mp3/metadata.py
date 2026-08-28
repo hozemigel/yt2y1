@@ -64,5 +64,8 @@ def write_sidecar(info: dict, mp3_path: str | Path) -> None:
         sidecar_path(mp3_path).write_text(
             json.dumps(build_sidecar(info), ensure_ascii=False), encoding="utf-8"
         )
-    except OSError:
+    except Exception:
+        # "Never raises" has to mean it: build_sidecar reads whatever
+        # yt-dlp handed back, and a surprise in that dict must not be the
+        # thing that fails an otherwise finished download.
         pass
