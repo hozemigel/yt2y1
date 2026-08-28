@@ -2,6 +2,7 @@
 
 import os
 import re
+import unicodedata
 from pathlib import Path
 
 from .models import TrackMeta
@@ -23,11 +24,50 @@ WINDOWS_RESERVED = (
     | {f"LPT{i}" for i in range(1, 10)}
 )
 
+# Typographic punctuation mapped to ASCII equivalents so cheap FAT32-based
+# players (Innioasis Y1) can display filenames correctly. Mirrors
+# ranking._PUNCTUATION_VARIANTS but applied to what is written to disk.
+TYPOGRAPHIC_VARIANTS = str.maketrans({
+    # Dash family
+    "\u2010": "-",  # HYPHEN
+    "\u2011": "-",  # NON-BREAKING HYPHEN
+    "\u2012": "-",  # FIGURE DASH
+    "\u2013": "-",  # EN DASH
+    "\u2014": "-",  # EM DASH
+    "\u2015": "-",  # HORIZONTAL BAR
+    "\u2212": "-",  # MINUS SIGN
+    # Single-quote family
+    "\u2018": "'",  # LEFT SINGLE QUOTATION MARK
+    "\u2019": "'",  # RIGHT SINGLE QUOTATION MARK
+    "\u201a": "'",  # SINGLE LOW-9 QUOTATION MARK
+    "\u201b": "'",  # SINGLE HIGH-REVERSED-9 QUOTATION MARK
+    "\u2032": "'",  # PRIME
+    # Double-quote family
+    "\u201c": '"',  # LEFT DOUBLE QUOTATION MARK
+    "\u201d": '"',  # RIGHT DOUBLE QUOTATION MARK
+    "\u201e": '"',  # DOUBLE LOW-9 QUOTATION MARK
+    "\u201f": '"',  # DOUBLE HIGH-REVERSED-9 QUOTATION MARK
+    "\u2033": '"',  # DOUBLE PRIME
+    # Ellipsis
+    "\u2026": "...",  # HORIZONTAL ELLIPSIS
+})
+
 
 def sanitize_component(text: str) -> str:
     """Make one piece of a filename safe, preserving readability."""
+    # 1. NFKD-normalise and drop combining marks so accented Latin letters
+    #    reduce to their ASCII base (AVICI, Beyonce). Scripts with no ASCII
+    #    decomposition (Cyrillic, CJK, etc.) are left intact.
+    text = "".join(
+        c for c in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(c)
+    )
+    # 2. Slash lookalikes (existing).
     for bad, good in SLASH_LOOKALIKES.items():
         text = text.replace(bad, good)
+    # 3. Typographic punctuation -> ASCII equivalents.
+    text = text.translate(TYPOGRAPHIC_VARIANTS)
+    # 4. Filesystem-illegal characters, whitespace collapse, trim (existing).
     text = ILLEGAL_PATTERN.sub("-", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip(" .")

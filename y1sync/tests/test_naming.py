@@ -125,3 +125,33 @@ def test_rename_to_the_same_name_is_a_no_op(tmp_path):
     path.write_bytes(b"audio")
     assert rename_file(path, "Black - Wonderful Life.mp3") == path
     assert path.read_bytes() == b"audio"
+
+
+# --- Unicode folding tests ---
+
+def test_typographic_hyphen_folds_to_ascii():
+    # U+2010 HYPHEN (not U+002D ASCII hyphen) must become "-".
+    assert sanitize_component("a‐ha") == "a-ha"
+
+
+def test_right_single_quotation_folds_to_ascii():
+    # U+2019 RIGHT SINGLE QUOTATION MARK must become "'".
+    assert sanitize_component("It Ain’t Me") == "It Ain't Me"
+
+
+def test_nfkd_strips_combining_marks_latin():
+    # U+012A LATIN CAPITAL LETTER I WITH MACRON decomposes under NFKD to I + combining macron.
+    assert sanitize_component("AVĪCI") == "AVICI"
+    # U+00E9 LATIN SMALL LETTER E WITH ACUTE decomposes to e + combining acute.
+    assert sanitize_component("Beyoncé") == "Beyonce"
+
+
+def test_nfkd_leaves_cyrillic_intact():
+    # Scripts with no ASCII decomposition must not be destroyed.
+    assert sanitize_component("Кино") == "Кино"
+
+
+def test_safe_filename_with_typographic_hyphen_in_artist():
+    # End-to-end: a‐ha (U+2010) in artist field → file uses ASCII hyphen.
+    meta = TrackMeta(artist="a‐ha", title="Stay on These Roads", album="X")
+    assert safe_filename(meta) == "a-ha - Stay on These Roads.mp3"
