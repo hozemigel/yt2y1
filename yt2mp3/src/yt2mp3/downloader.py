@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 import yt_dlp
 
+from .metadata import write_sidecar
+
 
 @dataclass
 class DownloadOptions:
@@ -54,6 +56,11 @@ def _make_postprocessor_hook(downloaded_files: list[str] | None):
                 return
             path = info.get("filepath") or info.get("_filename", "")
             print(f"Saved: {path}")
+            if path:
+                # What YouTube said this track was, for y1sync to use when
+                # a fingerprint later comes back empty. Best-effort by
+                # contract -- see metadata.write_sidecar.
+                write_sidecar(info, path)
             if downloaded_files is not None:
                 downloaded_files.append(path)
     return hook

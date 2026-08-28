@@ -1,3 +1,4 @@
+import json
 import os
 from yt2mp3.downloader import DownloadOptions, build_ydl_opts, download
 import yt2mp3.downloader as downloader_module
@@ -150,3 +151,67 @@ def test_downloaded_files_defaults_to_not_collecting(monkeypatch):
     rc = download(DownloadOptions(url="https://youtu.be/x"))
 
     assert rc == 0
+
+
+def test_download_writes_a_sidecar_next_to_the_mp3(monkeypatch, tmp_path):
+    mp3 = tmp_path / "Song.mp3"
+
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def download(self, urls):
+            for hook in self.opts["postprocessor_hooks"]:
+                hook({"status": "finished", "info_dict": {
+                    "ext": "mp3", "filepath": str(mp3),
+                    "title": "SZA - Snooze", "artist": "SZA", "track": "Snooze",
+                    "album": "SOS", "release_year": "2022", "channel": "SZAVEVO",
+                    "webpage_url": "https://youtu.be/x",
+                }})
+            return 0
+
+    monkeypatch.setattr(downloader_module.yt_dlp, "YoutubeDL", FakeYDL)
+
+    from yt2mp3.metadata import sidecar_path
+    download(DownloadOptions(url="https://youtu.be/x", output_dir=str(tmp_path)))
+
+    body = json.loads(sidecar_path(mp3).read_text(encoding="utf-8"))
+    assert body["artist"] == "SZA"
+    assert body["track"] == "Snooze"
+    assert body["year"] == "2022"
+
+
+def test_a_sidecar_write_failure_does_not_break_the_download(monkeypatch):
+    # filepath points into a directory that does not exist: write_sidecar
+    # swallows the OSError, and the download still reports success and
+    # still records the path for its caller.
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def download(self, urls):
+            for hook in self.opts["postprocessor_hooks"]:
+                hook({"status": "finished", "info_dict": {
+                    "ext": "mp3", "filepath": "/no/such/dir/Song.mp3",
+                }})
+            return 0
+
+    monkeypatch.setattr(downloader_module.yt_dlp, "YoutubeDL", FakeYDL)
+
+    collected: list[str] = []
+    rc = download(DownloadOptions(url="https://youtu.be/x"), collected)
+
+    assert rc == 0
+    assert collected == ["/no/such/dir/Song.mp3"]
