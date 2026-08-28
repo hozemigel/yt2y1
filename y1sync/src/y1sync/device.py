@@ -161,6 +161,8 @@ def safe_copy(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     temp = dst.with_name(f".y1sync-{dst.name}.part")
 
+    expected_size = src.stat().st_size
+
     try:
         with open(src, "rb") as reader, open(temp, "wb") as writer:
             shutil.copyfileobj(reader, writer)
@@ -168,14 +170,38 @@ def safe_copy(src: Path, dst: Path) -> None:
             # fsync, not os.sync: os.sync does not exist on Windows, and this
             # guarantees the specific file rather than something global.
             os.fsync(writer.fileno())
+        # Found on a real Y1, on a plugged-in device with nothing unplugged
+        # mid-copy: fsync above returned, and the copy still landed as an
+        # empty file. Whether that's a flaky USB controller lying about a
+        # completed write or something else, the fix is the same either
+        # way -- check, rather than trust, that the bytes actually arrived.
+        written = temp.stat().st_size
+        if written != expected_size:
+            raise OSError(
+                f"wrote {written} bytes to {dst.name}, expected {expected_size} "
+                "-- the copy did not fully land"
+            )
     except BaseException:
-        # An interrupted copy must not leave a stray .part file behind,
-        # and the destination's existing bytes must be untouched since
-        # the rename below never happens.
+        # An interrupted or short copy must not leave a stray .part file
+        # behind, and the destination's existing bytes must be untouched
+        # since the rename below never happens.
         temp.unlink(missing_ok=True)
         raise
 
     os.replace(temp, dst)
+
+    # The rename above is a separate write to the parent directory from the
+    # data written above, on FAT filesystems in particular, and the size
+    # actually visible under dst's final name is what a corrupted copy
+    # would show up as. Checked here rather than assumed from temp's size
+    # a moment ago: the exact bug this guards is the destination coming out
+    # different from what was just verified.
+    copied_size = dst.stat().st_size
+    if copied_size != expected_size:
+        raise OSError(
+            f"{dst.name} is {copied_size} bytes right after copying, "
+            f"expected {expected_size} -- the write did not fully land"
+        )
 
     # Mirrors src's mtime onto dst rather than leaving the copy's own
     # timestamp, so a later sync can tell an already-copied file apart

@@ -7,6 +7,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 ## [Unreleased]
 
 ### Fixed
+- **A copy that silently landed as a 0-byte file is now a loud, retriable
+  failure instead of a false "Copied."** Found for real on a Y1, plugged
+  in and untouched throughout: a track's copy raised no error and was
+  never interrupted, and still ended up present at the right name with
+  the right size reported... except the file itself was empty --
+  "Unknown" artist, no cover, because there were no ID3 tags left to read.
+  `safe_copy()` now checks the actual byte count landed at both the write
+  and the rename, and raises if either comes up short, so `y1sync sync`
+  reports it as `FAILED` and a later run's `needs_copy()` (size differs)
+  retries it -- rather than the file sitting silently broken on the
+  device until someone notices the missing cover art.
 - **Downloading one track no longer drags unrelated ones into review.**
   "Download from YouTube" used to re-scan the entire music folder after the
   download finished, so any other track already sitting there unresolved —

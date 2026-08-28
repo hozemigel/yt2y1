@@ -1,5 +1,7 @@
 # tests/test_device.py
 import os
+import shutil
+from pathlib import Path
 
 import pytest
 from y1sync.device import (
@@ -188,6 +190,48 @@ def test_safe_copy_cleans_up_the_temp_file_after_a_failed_copy(tmp_path, monkeyp
 
     assert dst.read_bytes() == b"old"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["dst.mp3", "src.mp3"]
+
+
+def test_safe_copy_raises_when_fewer_bytes_land_than_expected(tmp_path, monkeypatch):
+    # Regression test: found for real on a Y1, with the device plugged in
+    # and untouched throughout -- a copy that raised no exception and got
+    # no interruption still ended up as a 0-byte file at the right name.
+    # Whatever caused that (a lying USB controller, a flaky write), it must
+    # come out as a loud, retriable failure instead of a false "Copied".
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "dst.mp3"
+
+    def short_copy(reader, writer, *a, **kw):
+        writer.write(b"")  # a real copy would write len(b"payload") bytes
+
+    monkeypatch.setattr(shutil, "copyfileobj", short_copy)
+
+    with pytest.raises(OSError, match="did not fully land"):
+        safe_copy(src, dst)
+
+    # The short write must never have been promoted to the real name --
+    # same guarantee as any other failed copy.
+    assert not dst.exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["src.mp3"]
+
+
+def test_safe_copy_raises_when_the_destination_is_short_after_the_rename(tmp_path, monkeypatch):
+    # The harder-to-explain half of the same bug: the write and its fsync
+    # both genuinely succeeded, and the rename still somehow produced a
+    # short file under dst's final name.
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    dst = tmp_path / "dst.mp3"
+
+    def replace_with_an_empty_file(temp_path, dst_path):
+        Path(dst_path).write_bytes(b"")
+        Path(temp_path).unlink(missing_ok=True)
+
+    monkeypatch.setattr(os, "replace", replace_with_an_empty_file)
+
+    with pytest.raises(OSError, match="did not fully land"):
+        safe_copy(src, dst)
 
 
 @pytest.mark.skipif(
