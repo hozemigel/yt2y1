@@ -35,7 +35,7 @@ right here: [install-windows.ps1](install-windows.ps1).
 Open a terminal and paste:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-linux.sh | bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-linux.sh)"
 ```
 
 This installs Python, git, ffmpeg and chromaprint via `apt` if any are
@@ -55,7 +55,7 @@ On a non-`apt` distro, the manual steps below work anywhere Python does.
 Open Terminal and paste:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-macos.sh | bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-macos.sh)"
 ```
 
 This installs Homebrew itself if it's missing, then Python, git, ffmpeg

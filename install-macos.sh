@@ -4,7 +4,17 @@
 #
 # Run this with:
 #
-#   curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-macos.sh | bash
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-macos.sh)"
+#
+# Not "curl ... | bash": this script runs Homebrew, which is
+# long-running and shares this shell's stdin -- piping the script
+# straight into bash can desync bash's own read of the piped script
+# against brew reading from the same stdin, corrupting execution
+# partway through (this is exactly what happened on a real run: the
+# script's own unexecuted source started leaking into the terminal
+# output right after "brew install"). Command substitution downloads
+# the whole script into a string first, so there's no live pipe left
+# for anything to race against.
 #
 # It installs Homebrew itself if missing, then Python, git, ffmpeg and
 # chromaprint via Homebrew if any of those are missing, clones (or
@@ -185,11 +195,11 @@ else
 
     key=""
     while [ -z "$key" ]; do
-        # Explicitly from /dev/tty, not plain stdin: this script is meant
-        # to be run as "curl ... | bash", which feeds the script's own
-        # text through stdin -- a bare "read" here would consume more of
-        # the script instead of waiting for you to type, or hit EOF and
-        # never wait at all.
+        # Explicitly from /dev/tty, not plain stdin: kept as a defensive
+        # habit even though the documented bash -c "$(curl ...)" invocation
+        # above already leaves stdin free -- a bare "read" here would
+        # misbehave the same way the apt/brew step above did if this ever
+        # runs under a plain "curl ... | bash" pipe instead.
         read -r -p "Paste your AcoustID application key here: " key < /dev/tty
     done
 
