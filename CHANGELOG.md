@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once past 1.0.
 
+## [Unreleased]
+
+### Fixed
+- **Downloading one track no longer drags unrelated ones into review.**
+  "Download from YouTube" used to re-scan the entire music folder after the
+  download finished, so any other track already sitting there unresolved —
+  including one already on the Y1 from before — would surface for review
+  too, unconnected to what was just downloaded. It now only tags and syncs
+  the file it just downloaded. "Update player" is unaffected: it still
+  sweeps the whole folder, which is the point there.
+- **Ctrl+C during a review prompt no longer dumps a traceback.** It's now
+  caught cleanly and prints "Cancelled."
+
 ## [0.1.0] - 2026-08-28
 
 Initial tagged release. Both tools have been run end to end against the real

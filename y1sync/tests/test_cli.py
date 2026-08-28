@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from y1sync.cli import build_parser, cmd_download_and_sync, cmd_menu, discover_music_folders, main
+from y1sync.cli import (
+    build_parser,
+    cmd_download_and_sync,
+    cmd_menu,
+    cmd_scan,
+    discover_music_folders,
+    main,
+)
 from y1sync.config import Config, load_config, save_config
 from y1sync.models import Candidate, TrackMeta
 
@@ -251,6 +258,50 @@ def test_scan_does_not_re_ask_a_question_already_answered(tmp_path, monkeypatch)
     assert main(["scan", str(tmp_path)]) == 0
     assert len(lookups) == 1, "re-queried the network for a cached track"
     assert len(prompts) == 1, "re-asked a question already answered"
+
+
+def test_scan_only_restricts_processing_to_the_given_files(tmp_path, monkeypatch):
+    # An old file sits alongside a newly downloaded one. Restricting scan to
+    # "only" the new file must leave the old one completely untouched --
+    # not identified, not prompted for, not renamed.
+    new = tmp_path / "New Song.mp3"
+    new.write_bytes(b"new audio")
+    old = tmp_path / "Old Song.mp3"
+    old.write_bytes(b"old audio")
+
+    _stub_scan_side_effects(monkeypatch, tmp_path)
+    touched: list[str] = []
+    monkeypatch.setattr(
+        "y1sync.cli.identify",
+        lambda path, api_key=None, session=None: touched.append(path.name)
+        or [_confident_candidate()],
+    )
+
+    result = cmd_scan(str(tmp_path), dry_run=False, yes=False, verbose=False, only={new})
+
+    assert result == 0
+    assert touched == ["New Song.mp3"]
+    assert old.read_bytes() == b"old audio"  # untouched: not even renamed
+
+
+def test_scan_without_only_still_sweeps_the_whole_folder(tmp_path, monkeypatch):
+    # "only" is opt-in: the plain scan subcommand and "Update player" must
+    # keep covering everything under folder, as before.
+    (tmp_path / "One.mp3").write_bytes(b"one")
+    (tmp_path / "Two.mp3").write_bytes(b"two")
+
+    _stub_scan_side_effects(monkeypatch, tmp_path)
+    touched: list[str] = []
+    monkeypatch.setattr(
+        "y1sync.cli.identify",
+        lambda path, api_key=None, session=None: touched.append(path.name)
+        or [_confident_candidate()],
+    )
+
+    result = cmd_scan(str(tmp_path), dry_run=False, yes=False, verbose=False)
+
+    assert result == 0
+    assert sorted(touched) == ["One.mp3", "Two.mp3"]
 
 
 def test_doctor_reports_the_cache_location(tmp_path, capsys, monkeypatch):
@@ -914,3 +965,41 @@ def test_download_failure_skips_scan_and_sync(tmp_path, monkeypatch):
 
     assert result == 1
     assert calls == []
+
+
+def test_download_and_sync_scans_only_the_newly_downloaded_file(tmp_path, monkeypatch):
+    # Regression test for the reported bug: an old, still-unresolved track
+    # already sitting in the music folder must not be dragged into review
+    # just because a different, unrelated track was downloaded.
+    old = tmp_path / "Avicii - Without You.mp3"
+    old.write_bytes(b"old audio")
+    new_path = tmp_path / "Kato Feat. Jon - Turn The Lights Off.mp3"
+
+    def fake_download(opts):
+        new_path.write_bytes(b"new audio")
+        return 0
+
+    monkeypatch.setattr(
+        "y1sync.cli._load_yt2mp3",
+        lambda: (lambda: None, RuntimeError, _FakeDownloadOptions, fake_download),
+    )
+    captured = {}
+    monkeypatch.setattr("y1sync.cli.cmd_scan", lambda folder, **kw: captured.update(kw))
+    monkeypatch.setattr("y1sync.cli.cmd_sync", lambda folder, **kw: None)
+
+    replies = iter(["https://youtu.be/abc123", "1"])  # choice 1 -> 320 kbps
+    cmd_download_and_sync(str(tmp_path), input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert captured["only"] == {new_path}
+
+
+def test_main_handles_a_keyboard_interrupt_cleanly(monkeypatch, capsys):
+    def interrupted():
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("y1sync.cli.cmd_menu", interrupted)
+
+    result = main([])
+
+    assert result == 130
+    assert "Cancelled." in capsys.readouterr().out

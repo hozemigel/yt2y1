@@ -204,15 +204,29 @@ def _find_mp3s(root: Path) -> list[Path]:
     return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".mp3")
 
 
-def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
+def cmd_scan(
+    folder: str, dry_run: bool, yes: bool, verbose: bool, only: set[Path] | None = None
+) -> int:
+    """Identify, tag and rename the MP3s under folder.
+
+    ``only``, when given, restricts the run to that subset of files rather
+    than everything under folder -- used by cmd_download_and_sync so that
+    downloading one track doesn't drag every other unresolved file in the
+    music folder into review along with it. Left as None for the ``scan``
+    subcommand and "Update player", where sweeping the whole folder is the
+    point.
+    """
     root = Path(folder)
     if not root.is_dir():
         print(f"Not a folder: {root}")
         return 1
 
     files = _find_mp3s(root)
+    if only is not None:
+        files = [path for path in files if path in only]
     if not files:
-        print(f"No MP3 files in {root}")
+        if only is None:
+            print(f"No MP3 files in {root}")
         return 0
 
     config = load_config()
@@ -520,12 +534,21 @@ def cmd_download_and_sync(folder: str, input_fn=input, output_fn=print) -> int:
         output_fn("Cancelled.")
         return 0
 
+    # download() reports only an exit code, not which file(s) it wrote, so
+    # the new file is found by diffing the folder's MP3s before and after.
+    # That set is then the only thing cmd_scan is allowed to touch: without
+    # it, scan would sweep the whole music folder and drag every other
+    # unresolved track in there into review too -- so downloading one song
+    # you'd get asked about some unrelated track already sitting in the
+    # folder, unconnected to what you just came here to do.
+    before = set(_find_mp3s(Path(folder)))
     exit_code = download(DownloadOptions(url=url, output_dir=folder, quality=quality))
     if exit_code != 0:
         output_fn("Download failed.")
         return exit_code
+    new_files = set(_find_mp3s(Path(folder))) - before
 
-    cmd_scan(folder, dry_run=False, yes=False, verbose=False)
+    cmd_scan(folder, dry_run=False, yes=False, verbose=False, only=new_files)
     cmd_sync(folder, dry_run=False, verbose=False)
     return 0
 
@@ -570,13 +593,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
 
-    if args.command == "doctor":
-        return cmd_doctor()
-    if args.command == "scan":
-        return cmd_scan(args.folder, args.dry_run, args.yes, args.verbose)
-    if args.command == "sync":
-        return cmd_sync(args.folder, args.dry_run, args.verbose)
-    return cmd_menu()
+    try:
+        if args.command == "doctor":
+            return cmd_doctor()
+        if args.command == "scan":
+            return cmd_scan(args.folder, args.dry_run, args.yes, args.verbose)
+        if args.command == "sync":
+            return cmd_sync(args.folder, args.dry_run, args.verbose)
+        return cmd_menu()
+    except KeyboardInterrupt:
+        # Ctrl+C is how every interactive prompt here is meant to be
+        # cancelled -- most just check for a "0" reply, but choose_candidate
+        # has no cancel option of its own, so this is the only way out of
+        # it. Without this, that Ctrl+C reaches input() unhandled and dumps
+        # a raw traceback instead of just... stopping.
+        print("\nCancelled.")
+        return 130
 
 
 if __name__ == "__main__":
