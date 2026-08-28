@@ -1,3 +1,5 @@
+import json
+
 from y1sync.models import TrackMeta, Candidate
 from y1sync.cache import ContentCache, content_hash
 from y1sync.tagging import write_tags
@@ -8,7 +10,8 @@ def make_candidate():
         meta=TrackMeta(artist="A", title="B", album="C", year="1999"),
         confidence=0.95, source="acoustid", release_group_type="Album",
         secondary_types=("Compilation",), release_status="Official",
-        release_date="1999-01-01", artwork_url="https://example.test/a.jpg",
+        release_date="1999-01-01", stated_duration=211.0,
+        artwork_url="https://example.test/a.jpg",
     )
 
 
@@ -92,3 +95,30 @@ def test_choice_is_absent_until_one_is_made(tmp_path):
     cache = ContentCache(tmp_path / "cache")
     cache.put(audio, [make_candidate()])
     assert cache.get(audio).choice is None
+
+
+def test_round_trips_the_recording_length(tmp_path):
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(b"audio")
+    cache = ContentCache(tmp_path / "cache")
+    cache.put(audio, [make_candidate()])
+    assert cache.get(audio).candidates[0].stated_duration == 211.0
+
+
+def test_loads_an_entry_written_before_stated_duration_existed(tmp_path):
+    # Old cache files simply omit the key; they must still load.
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(b"audio")
+    cache = ContentCache(tmp_path / "cache")
+    legacy = {
+        "candidates": [{
+            "meta": {"artist": "A", "title": "B", "album": "C", "year": "1999",
+                     "genre": None, "track_number": None},
+            "confidence": 0.9, "source": "acoustid", "release_group_type": "Album",
+            "secondary_types": [], "release_status": "Official",
+            "release_date": "1999-01-01", "artwork_url": None,
+        }],
+        "choice": None,
+    }
+    cache._path_for(audio).write_text(json.dumps(legacy), encoding="utf-8")
+    assert cache.get(audio).candidates[0].stated_duration is None

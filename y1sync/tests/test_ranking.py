@@ -1,13 +1,15 @@
 from y1sync.models import TrackMeta, Candidate
-from y1sync.ranking import rank_candidates, decide
+from y1sync.ranking import rank_candidates, decide, length_mismatch
 
 
 def cand(album, conf=0.95, primary="Album", secondary=(),
-         status="Official", date="2000-01-01", source="acoustid"):
+         status="Official", date="2000-01-01", source="acoustid",
+         stated_duration=None):
     return Candidate(
         meta=TrackMeta(artist="X", title="Y", album=album),
         confidence=conf, source=source, release_group_type=primary,
         secondary_types=secondary, release_status=status, release_date=date,
+        stated_duration=stated_duration,
     )
 
 
@@ -248,3 +250,58 @@ def test_lone_remix_candidate_needs_review():
     pick, needs_review = decide([cand("Remixed", secondary=("Remix",), conf=0.97)])
     assert needs_review is True
     assert pick is not None
+
+
+# --- Track-length mismatch -------------------------------------------------
+#
+# An AcoustID fingerprint covers only a track's first ~120s, so a
+# shortened edit can share an ID with the full-length original. A lone
+# high-confidence match whose length is far from the file's must go to
+# review, not be tagged automatically.
+
+
+def test_length_mismatch_forces_review_of_a_lone_confident_match():
+    pick, needs_review = decide(
+        [cand("Original Album", conf=0.97, stated_duration=240.0)],
+        file_duration=90.0,
+    )
+    assert needs_review is True
+    assert pick is not None
+
+
+def test_matching_length_still_auto_applies():
+    pick, needs_review = decide(
+        [cand("Original Album", conf=0.97, stated_duration=182.0)],
+        file_duration=180.0,
+    )
+    assert needs_review is False
+
+
+def test_unknown_length_on_either_side_does_not_block_auto_apply():
+    # A missing duration is not evidence the audio differs.
+    _, no_recording_length = decide(
+        [cand("Album", conf=0.97, stated_duration=None)], file_duration=180.0
+    )
+    _, no_file_length = decide(
+        [cand("Album", conf=0.97, stated_duration=200.0)], file_duration=None
+    )
+    assert no_recording_length is False
+    assert no_file_length is False
+
+
+def test_the_mismatch_limit_is_thirty_seconds():
+    # Exactly 30s apart is allowed; just over it is not.
+    _, within = decide(
+        [cand("A", conf=0.97, stated_duration=210.0)], file_duration=180.0
+    )
+    _, beyond = decide(
+        [cand("A", conf=0.97, stated_duration=210.1)], file_duration=180.0
+    )
+    assert within is False
+    assert beyond is True
+
+
+def test_length_mismatch_helper_treats_unknowns_as_no_mismatch():
+    assert length_mismatch(cand("A", stated_duration=None), 180.0) is False
+    assert length_mismatch(cand("A", stated_duration=180.0), None) is False
+    assert length_mismatch(cand("A", stated_duration=300.0), 180.0) is True

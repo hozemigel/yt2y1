@@ -30,4 +30,10 @@ class Candidate:
     secondary_types: tuple[str, ...] = ()
     release_status: str | None = None
     release_date: str | None = None
+    #: The matched recording's own stated length in seconds, when the
+    #: source gives one. An AcoustID fingerprint only covers a track's
+    #: first ~120 seconds, so a short edit can match a full-length
+    #: recording; comparing this against the file is what catches that.
+    #: None when the source reports no duration.
+    stated_duration: float | None = None
     artwork_url: str | None = None

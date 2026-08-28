@@ -87,6 +87,8 @@ def _from_json(item: dict) -> Candidate:
         secondary_types=tuple(item["secondary_types"]),
         release_status=item["release_status"],
         release_date=item["release_date"],
+        # .get: entries cached before Candidate carried a stated duration.
+        stated_duration=item.get("stated_duration"),
         artwork_url=item["artwork_url"],
     )
 

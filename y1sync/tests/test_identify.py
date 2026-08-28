@@ -109,6 +109,16 @@ def test_each_acoustid_result_keeps_its_own_score():
     assert by_title["Weak"] == 0.42
 
 
+def test_parse_acoustid_response_carries_the_recording_length():
+    # The file check in ranking.decide() needs the recording's own length.
+    payload = {"results": [{"score": 0.9, "recordings": [{
+        "title": "T", "artists": [{"name": "A"}], "duration": 201.5,
+        "releasegroups": [{"title": "G", "type": "Album", "secondarytypes": [],
+                           "releases": [{"date": {"year": 1990}, "status": "Official"}]}],
+    }]}]}
+    assert parse_acoustid_response(payload)[0].stated_duration == 201.5
+
+
 def test_acoustid_partial_dates_do_not_crash():
     payload = {"results": [{"score": 0.9, "recordings": [{
         "title": "T", "artists": [{"name": "A"}],
@@ -392,6 +402,23 @@ def test_the_recording_matching_the_files_length_is_expanded_first(monkeypatch):
     # The remix is listed first by AcoustID but is 33 seconds shorter.
     assert [c.meta.album for c in found] == ["Be Mine"]
     assert f"{MUSICBRAINZ_ENDPOINT}/rec-remix" not in session.calls
+
+
+def test_expanded_candidates_carry_the_recordings_length(monkeypatch):
+    # decide() compares this against the file to catch a short edit that
+    # fingerprint-matched the full-length original.
+    monkeypatch.setattr("y1sync.identify.fingerprint", lambda p: (156, "AQADtEmkRSk"))
+    monkeypatch.setattr("y1sync.identify.MAX_RECORDINGS_EXPANDED", 1)
+    session = RoutingSession({
+        ACOUSTID_ENDPOINT: MIXED_LENGTHS,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-original": ORIGINAL_RELEASE,
+        f"{MUSICBRAINZ_ENDPOINT}/rec-remix": REMIX_RELEASE,
+        ITUNES_ENDPOINT: SHAGGY_ITUNES,
+    })
+
+    found = identify(Path("KAMRAD - Be Mine.mp3"), api_key="key", session=session)
+
+    assert found[0].stated_duration == 156.4
 
 
 def test_expansion_order_does_not_depend_on_acoustid_ordering(monkeypatch):

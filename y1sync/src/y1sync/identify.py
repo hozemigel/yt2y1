@@ -110,6 +110,7 @@ def parse_acoustid_response(payload: dict, score: float | None = None) -> list[C
             artists = recording.get("artists") or [{}]
             artist = artists[0].get("name", "")
             title = recording.get("title", "")
+            stated_duration = recording.get("duration")
             for group in recording.get("releasegroups", []):
                 releases = group.get("releases") or [{}]
                 first = releases[0]
@@ -127,6 +128,7 @@ def parse_acoustid_response(payload: dict, score: float | None = None) -> list[C
                     secondary_types=tuple(group.get("secondarytypes") or ()),
                     release_status=first.get("status"),
                     release_date=release_date,
+                    stated_duration=stated_duration,
                 ))
     return candidates
 
@@ -191,6 +193,10 @@ def candidates_from_musicbrainz(
     artists = recording.get("artists") or [{}]
     artist = artists[0].get("name", "")
     title = recording.get("title", "")
+    # AcoustID reports the recording's length; MusicBrainz is only being
+    # asked here for its releases, so the duration still comes from the
+    # AcoustID recording dict passed in.
+    stated_duration = recording.get("duration")
 
     candidates = []
     for release in releases:
@@ -209,6 +215,7 @@ def candidates_from_musicbrainz(
             secondary_types=tuple(group.get("secondary-types") or ()),
             release_status=release.get("status"),
             release_date=date or None,
+            stated_duration=stated_duration,
         ))
     return candidates
 

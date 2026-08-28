@@ -5,13 +5,16 @@ import shutil
 import sys
 from pathlib import Path
 
+from mutagen import MutagenError
+from mutagen.mp3 import MP3
+
 from .artwork import artwork_url_for, fetch_artwork
 from .cache import ContentCache
 from .config import Config, load_config, save_config
 from .device import backup_device, find_devices, needs_copy, safe_copy
 from .identify import AcoustIDKeyRejected, identify
 from .naming import rename_file, resolve_collision, safe_filename
-from .ranking import decide
+from .ranking import decide, length_mismatch
 from .review import choose_candidate
 from .tagging import write_tags
 
@@ -170,6 +173,20 @@ def _is_a_guess(candidate) -> bool:
     return candidate is not None and candidate.source != "acoustid"
 
 
+def _audio_length(path: Path) -> float | None:
+    """The file's playing time in seconds, or None if it can't be read.
+
+    Fed to decide() so a fingerprint match against a recording of a very
+    different length is sent to review rather than applied: an AcoustID
+    fingerprint only covers the first ~120s, so a short edit can match the
+    full-length original.
+    """
+    try:
+        return MP3(path).info.length
+    except (MutagenError, OSError, ValueError):
+        return None
+
+
 def _find_mp3s(root: Path) -> list[Path]:
     """Every MP3 under root, at any depth, sorted for stable output.
 
@@ -215,7 +232,8 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
                 candidates, pick = entry.candidates, entry.choice
 
             if pick is None:
-                pick, needs_review = decide(candidates)
+                file_length = _audio_length(path)
+                pick, needs_review = decide(candidates, file_duration=file_length)
                 if needs_review and yes and _is_a_guess(pick):
                     # --yes exists to skip choosing between plausible
                     # releases of a known recording. A filename guess is a
@@ -225,8 +243,16 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
                     unconfirmed.append(f"{path.name} -> {pick.meta.artist} - {pick.meta.title}")
                     print(f"  needs review  {path.name} (identified from its filename)")
                     continue
+                if needs_review and yes and length_mismatch(pick, file_length):
+                    # Same reasoning: a fingerprint match against a
+                    # recording of a very different length has not
+                    # confirmed this is that track, so --yes must not
+                    # apply it unseen.
+                    unconfirmed.append(f"{path.name} -> {pick.meta.artist} - {pick.meta.title}")
+                    print(f"  needs review  {path.name} (its length doesn't match the match)")
+                    continue
                 if needs_review and not yes:
-                    pick = choose_candidate(path, candidates)
+                    pick = choose_candidate(path, candidates, file_duration=file_length)
                 elif needs_review and pick is not None:
                     auto_accepted.append(f"{path.name} -> {pick.meta.album}")
 
@@ -287,8 +313,8 @@ def cmd_scan(folder: str, dry_run: bool, yes: bool, verbose: bool) -> int:
             print(f"  {line}")
 
     if unconfirmed:
-        print(f"\n{len(unconfirmed)} track(s) left untagged: identified only from")
-        print("their filenames, which --yes will not accept unseen.")
+        print(f"\n{len(unconfirmed)} track(s) left untagged: --yes will not accept")
+        print("a filename guess or a length-mismatched match unseen.")
         for line in unconfirmed:
             print(f"  {line}")
         print("\nRun without --yes to review them, or set up fingerprinting")

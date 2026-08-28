@@ -3,11 +3,12 @@ from y1sync.models import TrackMeta, Candidate
 from y1sync.review import choose_candidate
 
 
-def cand(album, date="2000-01-01", secondary=()):
+def cand(album, date="2000-01-01", secondary=(), stated_duration=None):
     return Candidate(
         meta=TrackMeta(artist="X", title="Y", album=album),
         confidence=0.95, source="acoustid", release_group_type="Album",
         secondary_types=secondary, release_status="Official", release_date=date,
+        stated_duration=stated_duration,
     )
 
 
@@ -54,6 +55,34 @@ def test_options_are_displayed_best_first():
                      output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
     shown = "\n".join(lines)
     assert shown.index("Rumours") < shown.index("Greatest Hits")
+
+
+def test_a_length_gap_is_called_out_with_both_times():
+    lines = []
+    options = [cand("Original Album", stated_duration=245.0)]
+    choose_candidate(Path("f.mp3"), options, input_fn=lambda _: "s",
+                     output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)),
+                     file_duration=88.0)
+    shown = "\n".join(lines)
+    assert "1:28" in shown and "4:05" in shown
+    assert "first two minutes" in shown
+
+
+def test_no_length_warning_when_the_lengths_agree():
+    lines = []
+    options = [cand("Original Album", stated_duration=182.0)]
+    choose_candidate(Path("f.mp3"), options, input_fn=lambda _: "s",
+                     output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)),
+                     file_duration=180.0)
+    assert not any("first two minutes" in line for line in lines)
+
+
+def test_no_length_warning_without_a_file_duration():
+    lines = []
+    options = [cand("Original Album", stated_duration=245.0)]
+    choose_candidate(Path("f.mp3"), options, input_fn=lambda _: "s",
+                     output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)))
+    assert not any("first two minutes" in line for line in lines)
 
 
 def _recording(title, album, conf=0.95):

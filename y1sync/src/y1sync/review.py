@@ -6,7 +6,12 @@ from itertools import groupby
 from pathlib import Path
 
 from .models import Candidate
-from .ranking import DEPRIORITISED_TYPES, rank_candidates, recording_identity
+from .ranking import (
+    DEPRIORITISED_TYPES,
+    DURATION_MISMATCH_LIMIT,
+    rank_candidates,
+    recording_identity,
+)
 
 # How many derivative releases (compilations, live albums, remixes) of one
 # recording to list individually. A popular song can have appeared on
@@ -14,6 +19,12 @@ from .ranking import DEPRIORITISED_TYPES, rank_candidates, recording_identity
 # original is shown, the rest are interchangeable for tagging purposes:
 # listing all of them just buries whatever comes after in the list.
 MAX_DERIVATIVE_SHOWN = 2
+
+
+def _mmss(seconds: float) -> str:
+    """Seconds as m:ss, for a length the user can compare against the track."""
+    total = round(seconds)
+    return f"{total // 60}:{total % 60:02d}"
 
 
 def _title_words(text: str) -> set[str]:
@@ -83,12 +94,15 @@ def choose_candidate(
     candidates: Sequence[Candidate],
     input_fn=input,
     output_fn=print,
+    file_duration: float | None = None,
 ) -> Candidate | None:
     """Present ranked options and return the user's choice.
 
     Returns None when the user skips or there is nothing to choose from.
     Options are shown best-first so pressing Enter takes the original
-    album rather than a compilation.
+    album rather than a compilation. ``file_duration`` is the track's own
+    length in seconds, used only to warn when it is far from the matched
+    recording's.
     """
     if not candidates:
         return None
@@ -119,6 +133,17 @@ def choose_candidate(
             f'  Fingerprint says this is "{ranked[0].meta.title}", which does not '
             "match the filename. Listen to the track before choosing — the file "
             "may be mislabeled."
+        )
+
+    top_stated = ranked[0].stated_duration
+    if (file_duration is not None and top_stated is not None
+            and abs(top_stated - file_duration) > DURATION_MISMATCH_LIMIT):
+        output_fn("")
+        output_fn(
+            f"  This file runs {_mmss(file_duration)} but the matched recording "
+            f"is {_mmss(top_stated)}. A fingerprint only covers the first two "
+            "minutes, so a short edit or an extended version can match the wrong "
+            "recording — check the track before choosing."
         )
 
     displayed: list[Candidate] = []

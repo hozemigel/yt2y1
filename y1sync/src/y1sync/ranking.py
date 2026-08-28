@@ -14,6 +14,17 @@ from .models import Candidate
 # Secondary release types that indicate a derivative release.
 DEPRIORITISED_TYPES = {"Compilation", "Live", "Remix", "DJ-mix"}
 
+# An AcoustID fingerprint is computed from a track's first ~120 seconds,
+# so a shortened radio edit or an extended mix can carry the same
+# fingerprint as the full recording. When the file's length and the
+# matched recording's stated length differ by more than this, the match
+# is never applied automatically -- it is sent to review with the gap
+# named. 30 seconds follows MusicBrainz Picard, which since 2.8 refuses
+# to link a fingerprint across a larger difference. It is deliberately
+# looser than identify.DURATION_TOLERANCE, which only breaks ties between
+# pressings of one recording.
+DURATION_MISMATCH_LIMIT = 30.0
+
 # Sorts after any real date, so undated releases fall to the bottom.
 _NO_DATE = "9999-99-99"
 
@@ -111,15 +122,30 @@ def rank_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
     return dedupe_candidates(sorted(candidates, key=key))
 
 
+def length_mismatch(candidate: Candidate, file_duration: float | None) -> bool:
+    """True when the file and the matched recording are too far apart in length.
+
+    Unknown on either side is not a mismatch: a missing duration is not
+    evidence the audio differs, and rejecting every recording MusicBrainz
+    has no length for would send far too much to review.
+    """
+    if file_duration is None or candidate.stated_duration is None:
+        return False
+    return abs(candidate.stated_duration - file_duration) > DURATION_MISMATCH_LIMIT
+
+
 def decide(
-    candidates: Sequence[Candidate], threshold: float = 0.90
+    candidates: Sequence[Candidate],
+    threshold: float = 0.90,
+    file_duration: float | None = None,
 ) -> tuple[Candidate | None, bool]:
     """Return (pick, needs_review).
 
     When needs_review is True the pick is a suggestion to show the user,
-    not a decision. Automatic application requires all four of:
+    not a decision. Automatic application requires all of:
     a fingerprint source, confidence at or above the threshold, exactly one
-    candidate release, and that release not being a compilation/live/remix.
+    candidate release, that release not being a compilation/live/remix, and
+    -- when ``file_duration`` is given -- its length matching the file's.
     A lone candidate is not proof of an unambiguous match -- it usually means
     thin MusicBrainz coverage, and the single catalogued release is often a
     compilation rather than the original album.
@@ -135,6 +161,11 @@ def decide(
     if top.source != "acoustid":
         return top, True
     if top.confidence < threshold:
+        return top, True
+    # An AcoustID match on a track whose length is far from the recording's
+    # is the fingerprint-only-covers-the-first-two-minutes case: a short
+    # edit reading as the full song. Surface it rather than tag it.
+    if length_mismatch(top, file_duration):
         return top, True
     # A lone candidate is not proof of an unambiguous match: thin MusicBrainz
     # coverage means the one catalogued release is often a compilation rather
