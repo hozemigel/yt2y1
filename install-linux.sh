@@ -163,8 +163,10 @@ fi
 if [ "$has_key" = true ]; then
     echo "  Already configured, skipping."
 else
-    echo "This is what lets y1sync identify tracks accurately instead of guessing"
-    echo "from filenames. Opening the signup page in your browser now."
+    echo "AcoustID is a free, open audio-fingerprinting lookup -- the same idea"
+    echo "as Shazam. It's what lets y1sync identify each track from its actual"
+    echo "audio instead of guessing from a messy YouTube filename. Getting a key"
+    echo "is free and takes about two minutes; opening the signup page now."
     echo ""
     echo -e "\033[33mOn that page: log in (a Google or GitHub account works), fill in a Name\033[0m"
     echo -e "\033[33mand Version for the form, submit, then copy the API key it shows you.\033[0m"

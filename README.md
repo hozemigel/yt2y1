@@ -20,10 +20,11 @@ irm https://raw.githubusercontent.com/hozemigel/yt2y1/main/install-windows.ps1 |
 ```
 
 This installs Python, Git, ffmpeg and chromaprint if any are missing,
-downloads yt2y1, installs both tools, walks you through the free AcoustID
-key, and finishes by running `y1sync doctor` so you can see everything is
-actually ready. It's safe to run again if anything gets interrupted —
-already-done steps are skipped.
+downloads yt2y1, installs both tools, pauses partway through to walk you
+through the free [AcoustID key](#whats-an-acoustid-key), and finishes by
+running `y1sync doctor` so you can see everything is actually ready. It's
+safe to run again if anything gets interrupted — already-done steps are
+skipped.
 
 If you'd rather see what it does before running it, the script itself is
 right here: [install-windows.ps1](install-windows.ps1).
@@ -40,10 +41,11 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/ins
 
 This installs Python, git, ffmpeg and chromaprint via `apt` if any are
 missing, downloads yt2y1, installs both tools into one virtual environment
-shared between them, adds them to your PATH, walks you through the free
-AcoustID key, and finishes by running `y1sync doctor` so you can see
-everything is actually ready. It's safe to run again if anything gets
-interrupted — already-done steps are skipped.
+shared between them, adds them to your PATH, pauses partway through to
+walk you through the free [AcoustID key](#whats-an-acoustid-key), and
+finishes by running `y1sync doctor` so you can see everything is actually
+ready. It's safe to run again if anything gets interrupted — already-done
+steps are skipped.
 
 If you'd rather see what it does before running it, the script itself is
 right here: [install-linux.sh](install-linux.sh).
@@ -61,13 +63,31 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hozemigel/yt2y1/main/ins
 This installs Homebrew itself if it's missing, then Python, git, ffmpeg
 and chromaprint via Homebrew if any of those are missing, downloads
 yt2y1, installs both tools into one virtual environment shared between
-them, adds them to your PATH, walks you through the free AcoustID key,
-and finishes by running `y1sync doctor` so you can see everything is
-actually ready. It's safe to run again if anything gets interrupted —
-already-done steps are skipped.
+them, adds them to your PATH, pauses partway through to walk you through
+the free [AcoustID key](#whats-an-acoustid-key), and finishes by running
+`y1sync doctor` so you can see everything is actually ready. It's safe to
+run again if anything gets interrupted — already-done steps are skipped.
 
 If you'd rather see what it does before running it, the script itself is
 right here: [install-macos.sh](install-macos.sh).
+
+## What's an AcoustID key?
+
+[AcoustID](https://acoustid.org/) is a free, open audio-fingerprinting
+lookup — the same idea as Shazam. It's what lets `y1sync` identify each
+track from its actual audio instead of guessing from a messy YouTube
+filename, which is the whole reason this tool exists instead of just
+renaming files by hand.
+
+Getting a key is free and takes about two minutes. The one-line
+installers above open [acoustid.org/new-application](https://acoustid.org/new-application)
+in your browser partway through and then pause at a terminal prompt for
+you to paste the key back in — that's the only part of installing that
+needs you at the keyboard. AcoustID issues two different kinds of key
+and it's easy to grab the wrong one; the installers link straight to the
+right page, so just following the link they open is enough. Setting it
+up by hand instead? See [y1sync's README](y1sync/README.md#setting-up-fingerprinting)
+for the two-key mixup to avoid and where the key is stored.
 
 ## What you need before you start
 
@@ -80,7 +100,7 @@ instead.)*
 | **git** | to download this repo | [git-scm.com](https://git-scm.com/downloads) |
 | **ffmpeg** | converts downloaded audio to MP3, and is used when decoding audio for tagging | see below |
 | **chromaprint** (`fpcalc`) | computes the audio fingerprint y1sync uses to identify tracks accurately | see below |
-| **A free AcoustID application key** | looks up what a fingerprint matches | [acoustid.org/new-application](https://acoustid.org/new-application) — see [y1sync's README](y1sync/README.md#setting-up-fingerprinting), it's a two-minute form |
+| **A free AcoustID application key** | identifies tracks by their actual audio, not by filename — see [above](#whats-an-acoustid-key) | [acoustid.org/new-application](https://acoustid.org/new-application), a two-minute form |
 | **The Y1 itself, over USB** | only needed for the last step, sending files to the device | — |
 
 y1sync still works without chromaprint or an AcoustID key — it just falls

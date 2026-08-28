@@ -285,8 +285,10 @@ if ($hasKey) {
     Write-Step "AcoustID key already configured, skipping."
 } else {
     Write-Step "Setting up your free AcoustID key..."
-    Write-Host "This is what lets y1sync identify tracks accurately instead of guessing"
-    Write-Host "from filenames. Opening the signup page in your browser now."
+    Write-Host "AcoustID is a free, open audio-fingerprinting lookup -- the same idea"
+    Write-Host "as Shazam. It's what lets y1sync identify each track from its actual"
+    Write-Host "audio instead of guessing from a messy YouTube filename. Getting a key"
+    Write-Host "is free and takes about two minutes; opening the signup page now."
     Write-Host ""
     Write-Host "On that page: log in (a Google or GitHub account works), fill in a Name" -ForegroundColor Yellow
     Write-Host "and Version for the form, submit, then copy the API key it shows you." -ForegroundColor Yellow
