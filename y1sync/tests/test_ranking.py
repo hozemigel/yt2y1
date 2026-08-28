@@ -224,3 +224,27 @@ def test_dedupe_merges_curly_and_straight_quotes_and_dashes():
         cand('"Greatest" Hits - Vol. 1', date="2000-01-01"),
     ])
     assert len(ranked) == 1
+
+
+def test_lone_compilation_candidate_needs_review():
+    # A lone candidate with Compilation secondary type must surface for review.
+    # Being the only candidate is not proof of an unambiguous match — it is
+    # usually just thin MusicBrainz coverage, and the one release catalogued
+    # is often a compilation rather than the original album.
+    pick, needs_review = decide([cand("Rock Times Vol. 9", secondary=("Compilation",), conf=0.95)])
+    assert needs_review is True
+    assert pick is not None
+
+
+def test_lone_live_candidate_needs_review():
+    # Live releases are derivative; a lone live match is not auto-applicable.
+    pick, needs_review = decide([cand("Live in Berlin", secondary=("Live",), conf=0.98)])
+    assert needs_review is True
+    assert pick is not None
+
+
+def test_lone_remix_candidate_needs_review():
+    # Remix releases are derivative; a lone remix match is not auto-applicable.
+    pick, needs_review = decide([cand("Remixed", secondary=("Remix",), conf=0.97)])
+    assert needs_review is True
+    assert pick is not None

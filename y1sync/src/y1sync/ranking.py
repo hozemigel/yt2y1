@@ -117,9 +117,12 @@ def decide(
     """Return (pick, needs_review).
 
     When needs_review is True the pick is a suggestion to show the user,
-    not a decision. Automatic application requires all three of:
-    a fingerprint source, confidence at or above the threshold, and
-    exactly one candidate release.
+    not a decision. Automatic application requires all four of:
+    a fingerprint source, confidence at or above the threshold, exactly one
+    candidate release, and that release not being a compilation/live/remix.
+    A lone candidate is not proof of an unambiguous match -- it usually means
+    thin MusicBrainz coverage, and the single catalogued release is often a
+    compilation rather than the original album.
     """
     if not candidates:
         return None, True
@@ -132,5 +135,10 @@ def decide(
     if top.source != "acoustid":
         return top, True
     if top.confidence < threshold:
+        return top, True
+    # A lone candidate is not proof of an unambiguous match: thin MusicBrainz
+    # coverage means the one catalogued release is often a compilation rather
+    # than the original album. Derivative releases must be surfaced for review.
+    if set(top.secondary_types) & DEPRIORITISED_TYPES:
         return top, True
     return top, False
