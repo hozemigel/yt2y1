@@ -9,7 +9,9 @@ same code runs on Linux, macOS and Windows.
 
 import filecmp
 import os
+import platform
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -252,6 +254,12 @@ def safe_copy(src: Path, dst: Path) -> None:
     # different from what was just verified.
     copied_size = dst.stat().st_size
     if copied_size != expected_size:
+        # Leaving the short file in place is worse than removing it: the Y1
+        # shows a 0-byte track as a "broken file" and the next sync, seeing
+        # a size mismatch, just tries the copy again. Deleting it means the
+        # track is plainly missing -- which the FAILED line above already
+        # says -- instead of silently unplayable.
+        dst.unlink(missing_ok=True)
         raise OSError(
             f"{dst.name} is {copied_size} bytes right after copying, "
             f"expected {expected_size} -- the write did not fully land"
@@ -280,3 +288,57 @@ def safe_copy(src: Path, dst: Path) -> None:
             os.close(dir_fd)
     except OSError:
         pass
+
+
+def _block_device_for(mount: Path) -> str | None:
+    """The /dev node backing `mount`, or None if it can't be determined."""
+    try:
+        for part in psutil.disk_partitions(all=False):
+            if Path(part.mountpoint) == Path(mount):
+                return part.device
+    except OSError:
+        pass
+    return None
+
+
+def flush_and_eject(mount: Path) -> bool:
+    """Flush every pending write to the medium, then unmount `mount`.
+
+    fsync-ing each copied file is not enough on FAT: the allocation table
+    that chains a file's clusters together is written lazily, so a track
+    that copied cleanly still reads back as 0 bytes -- the Y1's "broken
+    file" -- if the device is unplugged before that table lands. os.sync()
+    forces it out on POSIX; the unmount then makes "safe to disconnect"
+    actually true.
+
+    Returns True only if the volume was unmounted. The unmount is
+    best-effort -- no udisks, a volume still busy, or Windows (which has
+    no scriptable eject) all just return False, and the caller falls back
+    to telling the user to eject it by hand.
+    """
+    if hasattr(os, "sync"):
+        os.sync()
+
+    system = platform.system()
+    if system == "Windows":
+        return False
+
+    mount = Path(mount)
+    if system == "Darwin":
+        attempts = [["diskutil", "unmount", str(mount)]]
+    else:
+        attempts = []
+        dev = _block_device_for(mount)
+        if dev:
+            attempts.append(["udisksctl", "unmount", "-b", dev])
+        attempts.append(["umount", str(mount)])
+        attempts.append(["eject", str(mount)])
+
+    for cmd in attempts:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if proc.returncode == 0:
+            return True
+    return False

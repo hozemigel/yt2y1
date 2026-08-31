@@ -13,7 +13,8 @@ from .artwork import artwork_url_for, fetch_artwork
 from .cache import ContentCache
 from .config import Config, load_config, save_config
 from .device import (
-    backup_device, copy_status, find_devices, needs_transcode, restamp, safe_copy,
+    backup_device, copy_status, find_devices, flush_and_eject, needs_transcode,
+    restamp, safe_copy,
 )
 from .formats import SUPPORTED_EXTENSIONS, device_target_name, find_audio
 from .identify import AcoustIDKeyRejected, acoustid_key, identify
@@ -534,6 +535,19 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
             except OSError as exc:
                 print(f"  could not restamp {rel}: {exc}")
 
+    def disconnect_after_writing() -> None:
+        # fsync per file does not push FAT's allocation table to the card,
+        # so a track that copied fine still comes back 0 bytes -- the Y1's
+        # "broken file" -- if the device is unplugged before that table
+        # lands. Flush it and unmount here so "safe to disconnect" is true;
+        # if the unmount can't be done for the user, say so plainly.
+        if flush_and_eject(device):
+            print("Flushed and ejected — safe to unplug the player now.")
+        else:
+            print("Before unplugging: eject the drive in your file manager "
+                  "(or run  udisksctl unmount / diskutil unmount ). Pulling it "
+                  "while it's still mounted is what leaves 0-byte tracks behind.")
+
     if not pending:
         # Nothing would be written, so there's nothing to protect with a
         # backup either -- see backup_device()'s docstring. Restamping is a
@@ -541,7 +555,8 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
         restamp_all()
         if restampable:
             print(f"Already up to date -- corrected {len(restampable)} "
-                  f"timestamp(s), {unchanged} file(s) unchanged. Safe to disconnect.")
+                  f"timestamp(s), {unchanged} file(s) unchanged.")
+            disconnect_after_writing()
         else:
             print(f"Already up to date -- {unchanged} file(s) unchanged. "
                   "Safe to disconnect.")
@@ -575,7 +590,7 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
     if restampable:
         done.append(f"{len(restampable)} timestamp(s) corrected")
     suffix = f", {', '.join(done)}" if done else ""
-    print(f"Copied {copied} file(s){suffix}. Safe to disconnect.")
+    print(f"Copied {copied} file(s){suffix}.")
     if copied:
         # Found on a real Y1: a freshly copied track was missing from the
         # Music app right after unplugging, present again a bit later
@@ -592,8 +607,11 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
               "same reason, ignore it.")
     if failures:
         print(f"{failures} file(s) failed.")
-        if failures == len(pending):
-            return 1
+
+    disconnect_after_writing()
+
+    if failures and failures == len(pending):
+        return 1
     return 0
 
 

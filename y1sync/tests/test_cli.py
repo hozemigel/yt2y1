@@ -17,6 +17,15 @@ from y1sync.config import Config, load_config, save_config
 from y1sync.models import Candidate, TrackMeta
 
 
+@pytest.fixture(autouse=True)
+def _stub_eject(monkeypatch):
+    """cmd_sync flushes and unmounts the device at the end. Never let the
+    suite shell out to udisksctl/umount/diskutil -- default to a clean
+    eject; a test that cares can override it."""
+    monkeypatch.setattr("y1sync.cli.flush_and_eject", lambda mount: True,
+                        raising=False)
+
+
 class _FakeDownloadOptions:
     """Stands in for yt2mp3's DownloadOptions.
 
