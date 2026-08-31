@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from y1sync.cli import (
+    PromptAbort,
     build_parser,
     cmd_check_for_updates,
     cmd_download_and_sync,
@@ -8,9 +11,19 @@ from y1sync.cli import (
     cmd_scan,
     discover_music_folders,
     main,
+    _prompt_bitrate,
 )
 from y1sync.config import Config, load_config, save_config
 from y1sync.models import Candidate, TrackMeta
+
+
+@pytest.fixture(autouse=True)
+def _stub_eject(monkeypatch):
+    """cmd_sync flushes and unmounts the device at the end. Never let the
+    suite shell out to udisksctl/umount/diskutil -- default to a clean
+    eject; a test that cares can override it."""
+    monkeypatch.setattr("y1sync.cli.flush_and_eject", lambda mount: True,
+                        raising=False)
 
 
 class _FakeDownloadOptions:
@@ -81,7 +94,7 @@ def test_doctor_reports_status(capsys):
 
 def test_scan_on_empty_folder_succeeds(tmp_path, capsys):
     assert main(["scan", str(tmp_path)]) == 0
-    assert "no mp3" in capsys.readouterr().out.lower()
+    assert "no music files" in capsys.readouterr().out.lower()
 
 
 def test_scan_on_missing_folder_fails(tmp_path, capsys):
@@ -216,6 +229,19 @@ def test_rescanning_an_already_correct_file_is_a_no_op(tmp_path, capsys, monkeyp
         "Artist - Title.mp3"
     ]
     assert correct.read_bytes() == b"audio"
+
+
+def test_scan_keeps_each_file_its_own_extension(tmp_path, monkeypatch):
+    # A mixed-format folder: the rename must not turn everything into .mp3.
+    for name in ("a.flac", "b.ogg", "c.m4a", "d.wav", "e.mp3"):
+        (tmp_path / name).write_bytes(name.encode())
+
+    _stub_scan_side_effects(monkeypatch, tmp_path)
+    assert main(["scan", str(tmp_path)]) == 0
+
+    extensions = sorted(p.suffix for p in tmp_path.iterdir() if p.is_file())
+    assert extensions == [".flac", ".m4a", ".mp3", ".ogg", ".wav"]
+    assert (tmp_path / "Artist - Title.flac").exists()
 
 
 def _ambiguous_candidates() -> list[Candidate]:
@@ -503,6 +529,52 @@ def test_sync_skips_a_file_already_on_the_device(tmp_path, capsys, monkeypatch):
     assert "reindexing" not in out
 
 
+def test_sync_restamps_a_retagged_file_instead_of_recopying_it(tmp_path, capsys, monkeypatch):
+    # yt2mp3 re-tagging bumps a source file's mtime without changing its
+    # length. The device already holds those exact bytes, so the second
+    # sync must fix the timestamp -- not push the whole file back over USB
+    # or take another backup.
+    import os
+
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library"
+    source.mkdir()
+    track = source / "top.mp3"
+    track.write_bytes(b"identical audio bytes")
+
+    backups = []
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+    monkeypatch.setattr(
+        "y1sync.cli.backup_device",
+        lambda dev, root: backups.append(1) or (root / "stub"),
+    )
+
+    assert main(["sync", str(source)]) == 0
+    assert len(backups) == 1
+
+    on_device = device / "Music" / "top.mp3"
+    # Same bytes, timestamp moved well past FAT's 2s tolerance.
+    later = track.stat().st_mtime + 100
+    os.utime(track, (later, later))
+
+    capsys.readouterr()
+    assert main(["sync", str(source)]) == 0
+    out = capsys.readouterr().out
+
+    assert len(backups) == 1, "a restamp is metadata only -- no backup"
+    assert on_device.read_bytes() == b"identical audio bytes"
+    assert abs(on_device.stat().st_mtime - later) < 1
+    assert "timestamp" in out.lower()
+    assert "reindexing" not in out
+
+    capsys.readouterr()
+    assert main(["sync", str(source)]) == 0
+    out = capsys.readouterr().out
+    assert "up to date" in out.lower()
+    assert "corrected" not in out.lower()
+
+
 def test_sync_with_no_files_skips_the_reindexing_note(tmp_path, capsys, monkeypatch):
     device = _fake_device(tmp_path)
     source = tmp_path / "library"
@@ -535,6 +607,77 @@ def test_sync_dry_run_previews_the_whole_tree(tmp_path, capsys, monkeypatch):
     # --dry-run writes nothing anywhere, including no backup.
     assert not (tmp_path / "backups").exists()
     assert not any((device / "Music").iterdir())
+
+
+def test_sync_converts_a_wav_to_a_tagged_flac_on_the_device(
+    tmp_path, monkeypatch, make_audio
+):
+    from mutagen.flac import FLAC
+    from y1sync.models import TrackMeta
+    from y1sync.tagging import write_tags
+
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library" / "Massive Attack"
+    source.mkdir(parents=True)
+    wav = source / "Teardrop.wav"
+    wav.write_bytes(make_audio(".wav").read_bytes())
+    write_tags(wav, TrackMeta(artist="Massive Attack", title="Teardrop",
+                              album="Mezzanine", year="1998"),
+               artwork=b"\xff\xd8\xff" + b"z" * 4000)
+
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+
+    assert main(["sync", str(tmp_path / "library")]) == 0
+
+    flac = device / "Music" / "Massive Attack" / "Teardrop.flac"
+    assert flac.exists()
+    assert not (device / "Music" / "Massive Attack" / "Teardrop.wav").exists()
+    tags = FLAC(flac)
+    assert tags["artist"] == ["Massive Attack"]
+    assert tags["album"] == ["Mezzanine"]
+    assert len(tags.pictures) == 1
+
+
+def test_sync_does_not_reconvert_an_unchanged_wav(tmp_path, monkeypatch, make_audio):
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library"
+    source.mkdir()
+    (source / "Song.wav").write_bytes(make_audio(".wav").read_bytes())
+
+    backups = []
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+    monkeypatch.setattr("y1sync.cli.backup_device",
+                        lambda dev, root: backups.append(1) or (root / "stub"))
+
+    assert main(["sync", str(source)]) == 0
+    assert len(backups) == 1
+
+    flac = device / "Music" / "Song.flac"
+    first_mtime = flac.stat().st_mtime
+
+    assert main(["sync", str(source)]) == 0
+    assert len(backups) == 1, "second sync must find the FLAC already current"
+    assert flac.stat().st_mtime == first_mtime
+
+
+def test_sync_dry_run_names_the_wav_conversion(tmp_path, capsys, monkeypatch, make_audio):
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library"
+    source.mkdir()
+    (source / "Song.wav").write_bytes(make_audio(".wav").read_bytes())
+
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+
+    assert main(["sync", str(source), "--dry-run"]) == 0
+
+    out = capsys.readouterr().out
+    assert "would convert" in out
+    assert "Song.wav -> Song.flac" in out
+    assert not (tmp_path / "backups").exists()
+
 
 
 # --- --yes must not accept filename guesses ----------------------------
@@ -824,6 +967,48 @@ def test_menu_rejects_an_invalid_choice_and_reprompts(tmp_path, monkeypatch):
     assert any("Enter a number" in line for line in lines)
 
 
+def test_menu_gives_up_after_a_wall_of_unrecognised_replies(tmp_path, monkeypatch):
+    # A multi-line paste dumped into the prompt otherwise redraws the menu
+    # once per junk line without end. The loop has to stop on its own.
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    lines = []
+    with pytest.raises(PromptAbort):
+        cmd_menu(input_fn=lambda _: "not a number", output_fn=lines.append)
+
+    assert any("giving up" in line.lower() for line in lines)
+    # It reprompted a bounded number of times, not hundreds.
+    assert lines.count("Enter a number from the list.") < 5
+
+
+def test_menu_miss_counter_resets_after_a_real_choice(tmp_path, monkeypatch):
+    # Scattered typos across a long session must not accumulate toward the
+    # give-up cap -- only unrecognised replies in an unbroken run do.
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+    monkeypatch.setattr("y1sync.cli.cmd_doctor", lambda: None)
+
+    replies = iter(["x", "x", "x", "x", "4", "x", "x", "x", "x", "6"])
+    result = cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert result == 0
+
+
+def test_menu_aborts_on_end_of_input(tmp_path, monkeypatch):
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    def eof(_):
+        raise EOFError
+
+    with pytest.raises(PromptAbort):
+        cmd_menu(input_fn=eof, output_fn=lambda *a: None)
+
+
 def test_menu_option_3_changes_the_saved_folder(tmp_path, monkeypatch):
     path = _config_path(tmp_path)
     monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
@@ -943,6 +1128,21 @@ def test_download_bitrate_prompt_reasks_on_a_bad_choice(monkeypatch):
 
     assert captured["quality"] == "192"
     assert any("Enter 1-4" in line for line in lines)
+
+
+def test_bitrate_prompt_gives_up_after_too_many_bad_choices():
+    lines = []
+    with pytest.raises(PromptAbort):
+        _prompt_bitrate(input_fn=lambda _: "9", output_fn=lines.append)
+    assert any("giving up" in line.lower() for line in lines)
+
+
+def test_bitrate_prompt_aborts_on_end_of_input():
+    def eof(_):
+        raise EOFError
+
+    with pytest.raises(PromptAbort):
+        _prompt_bitrate(input_fn=eof, output_fn=lambda *a: None)
 
 
 def test_download_passes_the_folder_url_and_quality_through(tmp_path, monkeypatch):
@@ -1091,6 +1291,19 @@ def test_main_handles_a_keyboard_interrupt_cleanly(monkeypatch, capsys):
 
     assert result == 130
     assert "Cancelled." in capsys.readouterr().out
+
+
+def test_main_handles_a_prompt_abort_cleanly(monkeypatch, capsys):
+    # A prompt that bailed on EOF or a wall of junk has already explained
+    # itself; main() must exit on it, not re-raise a traceback.
+    def aborted():
+        raise PromptAbort
+
+    monkeypatch.setattr("y1sync.cli.cmd_menu", aborted)
+
+    result = main([])
+
+    assert result == 130
 
 
 # --- cmd_check_for_updates -------------------------------------------------

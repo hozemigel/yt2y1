@@ -102,7 +102,7 @@ instead.)*
 |---|---|---|
 | **Python 3.10+** | both tools are Python packages | [python.org/downloads](https://www.python.org/downloads/) — on Windows, tick "Add python.exe to PATH" during install |
 | **git** | to download this repo | [git-scm.com](https://git-scm.com/downloads) |
-| **ffmpeg** | converts downloaded audio to MP3, and is used when decoding audio for tagging | see below |
+| **ffmpeg** | converts downloaded audio to MP3, decodes audio for tagging, and converts WAV files to FLAC when syncing them to the device | see below |
 | **chromaprint** (`fpcalc`) | computes the audio fingerprint y1sync uses to identify tracks accurately | see below |
 | **deno** (or another JS runtime) | yt-dlp uses it to extract YouTube reliably; without one, downloads still work but time out and fail more often | see below |
 | **The Y1 itself, over USB** | only needed for the last step, sending files to the device | — |

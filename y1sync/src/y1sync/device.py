@@ -7,8 +7,11 @@ portable: it matches the Y1's folder layout rather than any path, so the
 same code runs on Linux, macOS and Windows.
 """
 
+import filecmp
 import os
+import platform
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -128,26 +131,79 @@ def backup_device(device: Path, dest_root: Path, keep: int = BACKUP_RETENTION) -
 _MTIME_TOLERANCE = 2.0
 
 
-def needs_copy(src: Path, dst: Path) -> bool:
-    """True when dst is missing or plausibly holds different bytes than src.
+def copy_status(src: Path, dst: Path) -> str:
+    """How dst on the device compares to src in the library.
 
-    A sync is run often on a library that mostly hasn't changed since the
-    last time, and re-copying gigabytes of already-identical audio over
-    USB on every run is the difference between a sync that takes seconds
-    and one that takes minutes. Size and mtime are a good enough proxy for
-    "already copied" without re-reading every file's contents -- the same
-    trade-off rsync and most sync tools make. safe_copy() is what leaves
-    dst's mtime matching src's after a real copy, which is what lets a
-    later run tell the two apart.
+    - "absent"      -- dst is missing; it has to be copied.
+    - "differs"     -- dst holds different bytes than src; it has to be recopied.
+    - "stale-mtime" -- dst already holds exactly src's bytes, but its timestamp
+                       has drifted past FAT's 2s resolution. yt2mp3 re-tagging
+                       rewrites a file in place without changing its length, so
+                       this is the usual aftermath of a re-tag: nothing needs to
+                       cross USB, only dst's mtime wants restamping so the next
+                       run's cheap size+mtime check passes.
+    - "current"     -- dst matches src; nothing to do.
+
+    A sync is run often on a library that mostly hasn't changed, and
+    re-sending gigabytes of already-identical audio over USB on every run is
+    the difference between a sync that takes seconds and one that takes
+    minutes. The steady-state case -- sizes and mtimes agree -- still costs
+    only a stat per side and never opens a file. Bytes are compared only when
+    the sizes match but the mtimes disagree, i.e. exactly the files a re-tag
+    left looking changed when their audio is untouched; an earlier version
+    recopied every one of them.
+    """
+    try:
+        dst_stat = dst.stat()
+    except OSError:
+        return "absent"
+    src_stat = src.stat()
+    if dst_stat.st_size != src_stat.st_size:
+        return "differs"
+    if abs(dst_stat.st_mtime - src_stat.st_mtime) <= _MTIME_TOLERANCE:
+        return "current"
+    return "stale-mtime" if filecmp.cmp(src, dst, shallow=False) else "differs"
+
+
+def needs_copy(src: Path, dst: Path) -> bool:
+    """True when dst is missing or holds different bytes than src.
+
+    A metadata-only timestamp drift (copy_status's "stale-mtime") is
+    deliberately not a reason to copy -- re-sending an identical file over
+    USB is the exact cost this check exists to avoid. cmd_sync restamps
+    those separately so the drift does not outlive one run.
+    """
+    return copy_status(src, dst) in ("absent", "differs")
+
+
+def restamp(src: Path, dst: Path) -> None:
+    """Set dst's mtime to src's without touching its bytes.
+
+    The device already holds src's exact contents -- copy_status returned
+    "stale-mtime" -- and only the timestamp drifted. Mirroring it back, the
+    same thing safe_copy does after a real copy, lets the next run's cheap
+    size+mtime check skip the file instead of reading both sides again. A
+    directory-entry write, not a data write: if it does not land, the next
+    run simply compares bytes once more.
+    """
+    src_stat = Path(src).stat()
+    os.utime(dst, (src_stat.st_atime, src_stat.st_mtime))
+
+
+def needs_transcode(src: Path, dst: Path) -> bool:
+    """True when dst, a converted file, is missing or older than src.
+
+    Unlike needs_copy, dst is not a byte-for-byte copy of src, so size
+    tells us nothing -- only presence and mtime can say whether an
+    earlier sync already produced it. wav_to_flac() mirrors src's mtime
+    onto dst once the conversion lands, exactly as safe_copy() does for a
+    plain copy, which is what makes this comparison hold across runs.
     """
     try:
         dst_stat = dst.stat()
     except OSError:
         return True
-    src_stat = src.stat()
-    if dst_stat.st_size != src_stat.st_size:
-        return True
-    return abs(dst_stat.st_mtime - src_stat.st_mtime) > _MTIME_TOLERANCE
+    return abs(dst_stat.st_mtime - src.stat().st_mtime) > _MTIME_TOLERANCE
 
 
 def safe_copy(src: Path, dst: Path) -> None:
@@ -198,6 +254,12 @@ def safe_copy(src: Path, dst: Path) -> None:
     # different from what was just verified.
     copied_size = dst.stat().st_size
     if copied_size != expected_size:
+        # Leaving the short file in place is worse than removing it: the Y1
+        # shows a 0-byte track as a "broken file" and the next sync, seeing
+        # a size mismatch, just tries the copy again. Deleting it means the
+        # track is plainly missing -- which the FAILED line above already
+        # says -- instead of silently unplayable.
+        dst.unlink(missing_ok=True)
         raise OSError(
             f"{dst.name} is {copied_size} bytes right after copying, "
             f"expected {expected_size} -- the write did not fully land"
@@ -226,3 +288,57 @@ def safe_copy(src: Path, dst: Path) -> None:
             os.close(dir_fd)
     except OSError:
         pass
+
+
+def _block_device_for(mount: Path) -> str | None:
+    """The /dev node backing `mount`, or None if it can't be determined."""
+    try:
+        for part in psutil.disk_partitions(all=False):
+            if Path(part.mountpoint) == Path(mount):
+                return part.device
+    except OSError:
+        pass
+    return None
+
+
+def flush_and_eject(mount: Path) -> bool:
+    """Flush every pending write to the medium, then unmount `mount`.
+
+    fsync-ing each copied file is not enough on FAT: the allocation table
+    that chains a file's clusters together is written lazily, so a track
+    that copied cleanly still reads back as 0 bytes -- the Y1's "broken
+    file" -- if the device is unplugged before that table lands. os.sync()
+    forces it out on POSIX; the unmount then makes "safe to disconnect"
+    actually true.
+
+    Returns True only if the volume was unmounted. The unmount is
+    best-effort -- no udisks, a volume still busy, or Windows (which has
+    no scriptable eject) all just return False, and the caller falls back
+    to telling the user to eject it by hand.
+    """
+    if hasattr(os, "sync"):
+        os.sync()
+
+    system = platform.system()
+    if system == "Windows":
+        return False
+
+    mount = Path(mount)
+    if system == "Darwin":
+        attempts = [["diskutil", "unmount", str(mount)]]
+    else:
+        attempts = []
+        dev = _block_device_for(mount)
+        if dev:
+            attempts.append(["udisksctl", "unmount", "-b", dev])
+        attempts.append(["umount", str(mount)])
+        attempts.append(["eject", str(mount)])
+
+    for cmd in attempts:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if proc.returncode == 0:
+            return True
+    return False

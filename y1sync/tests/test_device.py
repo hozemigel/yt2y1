@@ -1,12 +1,13 @@
 # tests/test_device.py
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 from y1sync.device import (
     BACKUP_RETENTION, Y1_SIGNATURE, looks_like_y1, find_devices,
-    backup_device, needs_copy, safe_copy,
+    backup_device, copy_status, flush_and_eject, needs_copy, restamp, safe_copy,
 )
 
 
@@ -299,14 +300,47 @@ def test_needs_copy_when_size_differs(tmp_path):
     assert needs_copy(src, dst) is True
 
 
-def test_needs_copy_when_mtime_differs_beyond_fat32_tolerance(tmp_path):
+def test_needs_copy_false_when_only_mtime_drifted_but_bytes_match(tmp_path):
+    # yt2mp3 re-tagging rewrites a file in place without changing its
+    # length: the mtime moves, the audio does not. Re-sending it over USB
+    # is the exact cost this check exists to avoid.
     src = tmp_path / "src.mp3"
     src.write_bytes(b"payload")
     dst = tmp_path / "dst.mp3"
     dst.write_bytes(b"payload")
     now = src.stat().st_mtime
     os.utime(dst, (now - 10, now - 10))
+    assert needs_copy(src, dst) is False
+    assert copy_status(src, dst) == "stale-mtime"
+
+
+def test_needs_copy_when_same_size_but_bytes_differ(tmp_path):
+    # A metadata edit that keeps the byte count identical must still be
+    # caught -- size alone would miss it, and so would the old mtime check
+    # if the timestamps happened to line up.
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload-A")
+    dst = tmp_path / "dst.mp3"
+    dst.write_bytes(b"payload-B")
+    now = src.stat().st_mtime
+    os.utime(dst, (now - 10, now - 10))
     assert needs_copy(src, dst) is True
+    assert copy_status(src, dst) == "differs"
+
+
+def test_restamp_brings_dst_mtime_onto_src_without_touching_bytes(tmp_path):
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"payload")
+    os.utime(src, (1_700_000_000, 1_700_000_000))
+    dst = tmp_path / "dst.mp3"
+    dst.write_bytes(b"payload")
+    os.utime(dst, (1_699_999_000, 1_699_999_000))
+
+    restamp(src, dst)
+
+    assert dst.read_bytes() == b"payload"
+    assert dst.stat().st_mtime == pytest.approx(1_700_000_000)
+    assert needs_copy(src, dst) is False
 
 
 def test_needs_copy_tolerates_fat32s_two_second_resolution(tmp_path):
@@ -336,3 +370,61 @@ def test_safe_copy_survives_a_directory_that_cannot_be_fsynced(tmp_path, monkeyp
     safe_copy(src, dst)
 
     assert dst.read_bytes() == b"payload"
+
+
+def test_safe_copy_removes_the_short_file_when_the_write_does_not_land(tmp_path, monkeypatch):
+    # A card that acknowledges a write it never made leaves dst at 0 bytes
+    # after os.replace. Leaving it there means the Y1 shows a "broken
+    # file" and the next sync keeps retrying it -- delete it instead.
+    src = tmp_path / "src.mp3"
+    src.write_bytes(b"a real payload")
+    dst = tmp_path / "dst.mp3"
+
+    def dropping_replace(a, b):
+        Path(b).write_bytes(b"")   # the bytes "arrived" as nothing
+        Path(a).unlink()
+
+    monkeypatch.setattr(os, "replace", dropping_replace)
+
+    with pytest.raises(OSError, match="did not fully land"):
+        safe_copy(src, dst)
+    assert not dst.exists()
+    assert not (tmp_path / f".y1sync-{dst.name}.part").exists()
+
+
+def test_flush_and_eject_reports_windows_cannot_script_it(monkeypatch):
+    synced = []
+    monkeypatch.setattr("y1sync.device.platform.system", lambda: "Windows")
+    monkeypatch.setattr(os, "sync", lambda: synced.append(True), raising=False)
+
+    assert flush_and_eject(Path("E:\\")) is False
+    assert synced == [True]  # the flush still happens
+
+
+def test_flush_and_eject_unmounts_via_udisks_on_linux(monkeypatch):
+    monkeypatch.setattr("y1sync.device.platform.system", lambda: "Linux")
+    monkeypatch.setattr(os, "sync", lambda: None, raising=False)
+    monkeypatch.setattr("y1sync.device._block_device_for", lambda mount: "/dev/sdb1")
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("y1sync.device.subprocess.run", fake_run)
+
+    assert flush_and_eject(Path("/media/u/Y1")) is True
+    assert calls == [["udisksctl", "unmount", "-b", "/dev/sdb1"]]
+
+
+def test_flush_and_eject_returns_false_when_every_unmount_attempt_fails(monkeypatch):
+    monkeypatch.setattr("y1sync.device.platform.system", lambda: "Linux")
+    monkeypatch.setattr(os, "sync", lambda: None, raising=False)
+    monkeypatch.setattr("y1sync.device._block_device_for", lambda mount: None)
+    monkeypatch.setattr(
+        "y1sync.device.subprocess.run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "busy"),
+    )
+
+    assert flush_and_eject(Path("/media/u/Y1")) is False

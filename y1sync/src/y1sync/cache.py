@@ -8,6 +8,7 @@ from pathlib import Path
 from mutagen import MutagenError
 from mutagen.mp3 import MP3
 
+from .identify import fingerprint
 from .models import Candidate, TrackMeta
 
 _CHUNK = 1024 * 1024
@@ -40,15 +41,27 @@ def _audio_bounds(path: Path) -> tuple[int, int]:
 
 
 def content_hash(path: Path) -> str:
-    """SHA-256 of the file's audio payload, excluding its ID3 tags.
+    """A key identifying a file by its audio, not its tags or its name.
 
-    The tag region has to be excluded because write_tags() embeds frames
-    into the same file the cache keys on. Hashing the whole file would
-    change the key on every successful scan, so the second run would miss
-    every entry, re-query the network for every track and re-ask every
-    question the user has already answered.
+    The tag region must not count: write_tags() edits it in place, and a
+    key that moved with it would miss on the very next scan, re-querying
+    the network for every track and re-asking every question already
+    answered.
+
+    MP3 is hashed directly, minus its ID3v2 header and ID3v1 trailer.
+    Every other format is keyed on its chromaprint fingerprint, which is
+    derived from decoded audio and so is blind to tags by nature. If
+    fpcalc is missing, or refuses a file too short to fingerprint, the
+    whole file is hashed as a last resort -- correct, just not stable
+    across a re-tag.
     """
     path = Path(path)
+    if path.suffix.lower() == ".mp3":
+        return _mp3_content_hash(path)
+    return _fingerprint_or_whole(path)
+
+
+def _mp3_content_hash(path: Path) -> str:
     start, end = _audio_bounds(path)
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -59,6 +72,19 @@ def content_hash(path: Path) -> str:
             if not chunk:
                 break
             remaining -= len(chunk)
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _fingerprint_or_whole(path: Path) -> str:
+    digest = hashlib.sha256()
+    fp = fingerprint(path)
+    if fp is not None:
+        duration, printout = fp
+        digest.update(f"fpcalc:{duration}:{printout}".encode("utf-8"))
+        return digest.hexdigest()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(_CHUNK), b""):
             digest.update(chunk)
     return digest.hexdigest()
 

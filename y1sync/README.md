@@ -2,15 +2,25 @@
 
 Prepare and sync music libraries for the [Innioasis Y1](https://www.innioasis.com/) player.
 
-The Y1 groups its library by ID3 tags and shows embedded cover art. MP3s
+The Y1 groups its library by tags and shows embedded cover art. Tracks
 ripped from YouTube arrive with no tags at all, so the device shows a flat
 list of filenames under "Unknown Artist". y1sync fixes that.
+
+It works on MP3, FLAC, Ogg Vorbis and M4A — each tagged in the scheme its
+own players expect (ID3v2.3 for MP3, Vorbis comments for FLAC and Ogg,
+iTunes atoms for M4A). Other files in the folder are left alone.
+
+WAV is a special case: the Y1 plays it but reads nothing from its tags,
+so `sync` puts a WAV on the device as a lossless FLAC instead — same
+audio, roughly half the size, and tags and cover art that the device
+actually shows. Your own WAV file is never modified.
 
 ## Why not use beets or Picard?
 
 Both are excellent and both are general-purpose. Neither knows what the Y1
 needs: ID3v2.3 rather than v2.4, FAT32-safe filenames, and the device's
-folder layout. y1sync does one job for one player.
+folder layout. y1sync does one job for one player, across every format
+that player can read.
 
 ## What makes it accurate
 

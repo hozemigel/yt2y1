@@ -48,6 +48,21 @@ def test_truncates_to_max_length():
     assert len(name) <= 100 + len(".mp3")
 
 
+def test_keeps_the_source_extension():
+    meta = TrackMeta(artist="Boards of Canada", title="Roygbiv", album="Music Has the Right")
+    assert safe_filename(meta, ".flac") == "Boards of Canada - Roygbiv.flac"
+
+
+def test_lower_cases_the_extension():
+    meta = TrackMeta(artist="A", title="B", album="X")
+    assert safe_filename(meta, ".OGG") == "A - B.ogg"
+
+
+def test_extension_defaults_to_mp3():
+    meta = TrackMeta(artist="A", title="B", album="X")
+    assert safe_filename(meta) == "A - B.mp3"
+
+
 def test_resolve_collision_appends_counter():
     taken = {"song.mp3"}
     assert resolve_collision("song.mp3", taken) == "song (2).mp3"
