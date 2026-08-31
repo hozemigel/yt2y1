@@ -7,6 +7,7 @@ portable: it matches the Y1's folder layout rather than any path, so the
 same code runs on Linux, macOS and Windows.
 """
 
+import filecmp
 import os
 import shutil
 from datetime import datetime
@@ -128,26 +129,63 @@ def backup_device(device: Path, dest_root: Path, keep: int = BACKUP_RETENTION) -
 _MTIME_TOLERANCE = 2.0
 
 
-def needs_copy(src: Path, dst: Path) -> bool:
-    """True when dst is missing or plausibly holds different bytes than src.
+def copy_status(src: Path, dst: Path) -> str:
+    """How dst on the device compares to src in the library.
 
-    A sync is run often on a library that mostly hasn't changed since the
-    last time, and re-copying gigabytes of already-identical audio over
-    USB on every run is the difference between a sync that takes seconds
-    and one that takes minutes. Size and mtime are a good enough proxy for
-    "already copied" without re-reading every file's contents -- the same
-    trade-off rsync and most sync tools make. safe_copy() is what leaves
-    dst's mtime matching src's after a real copy, which is what lets a
-    later run tell the two apart.
+    - "absent"      -- dst is missing; it has to be copied.
+    - "differs"     -- dst holds different bytes than src; it has to be recopied.
+    - "stale-mtime" -- dst already holds exactly src's bytes, but its timestamp
+                       has drifted past FAT's 2s resolution. yt2mp3 re-tagging
+                       rewrites a file in place without changing its length, so
+                       this is the usual aftermath of a re-tag: nothing needs to
+                       cross USB, only dst's mtime wants restamping so the next
+                       run's cheap size+mtime check passes.
+    - "current"     -- dst matches src; nothing to do.
+
+    A sync is run often on a library that mostly hasn't changed, and
+    re-sending gigabytes of already-identical audio over USB on every run is
+    the difference between a sync that takes seconds and one that takes
+    minutes. The steady-state case -- sizes and mtimes agree -- still costs
+    only a stat per side and never opens a file. Bytes are compared only when
+    the sizes match but the mtimes disagree, i.e. exactly the files a re-tag
+    left looking changed when their audio is untouched; an earlier version
+    recopied every one of them.
     """
     try:
         dst_stat = dst.stat()
     except OSError:
-        return True
+        return "absent"
     src_stat = src.stat()
     if dst_stat.st_size != src_stat.st_size:
-        return True
-    return abs(dst_stat.st_mtime - src_stat.st_mtime) > _MTIME_TOLERANCE
+        return "differs"
+    if abs(dst_stat.st_mtime - src_stat.st_mtime) <= _MTIME_TOLERANCE:
+        return "current"
+    return "stale-mtime" if filecmp.cmp(src, dst, shallow=False) else "differs"
+
+
+def needs_copy(src: Path, dst: Path) -> bool:
+    """True when dst is missing or holds different bytes than src.
+
+    A metadata-only timestamp drift (copy_status's "stale-mtime") is
+    deliberately not a reason to copy -- re-sending an identical file over
+    USB is the exact cost this check exists to avoid. cmd_sync restamps
+    those separately so the drift does not outlive one run.
+    """
+    return copy_status(src, dst) in ("absent", "differs")
+
+
+def restamp(src: Path, dst: Path) -> None:
+    """Set dst's mtime to src's without touching its bytes.
+
+    The device already holds src's exact contents -- copy_status returned
+    "stale-mtime" -- and only the timestamp drifted. Mirroring it back, the
+    same thing safe_copy does after a real copy, lets the next run's cheap
+    size+mtime check skip the file instead of reading both sides again. A
+    directory-entry write, not a data write: if it does not land, the next
+    run simply compares bytes once more.
+    """
+    src_stat = Path(src).stat()
+    os.utime(dst, (src_stat.st_atime, src_stat.st_mtime))
 
 
 def needs_transcode(src: Path, dst: Path) -> bool:

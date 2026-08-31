@@ -516,6 +516,52 @@ def test_sync_skips_a_file_already_on_the_device(tmp_path, capsys, monkeypatch):
     assert "reindexing" not in out
 
 
+def test_sync_restamps_a_retagged_file_instead_of_recopying_it(tmp_path, capsys, monkeypatch):
+    # yt2mp3 re-tagging bumps a source file's mtime without changing its
+    # length. The device already holds those exact bytes, so the second
+    # sync must fix the timestamp -- not push the whole file back over USB
+    # or take another backup.
+    import os
+
+    device = _fake_device(tmp_path)
+    source = tmp_path / "library"
+    source.mkdir()
+    track = source / "top.mp3"
+    track.write_bytes(b"identical audio bytes")
+
+    backups = []
+    monkeypatch.setattr("y1sync.cli.find_devices", lambda: [device])
+    monkeypatch.setattr("y1sync.cli.BACKUP_ROOT", tmp_path / "backups")
+    monkeypatch.setattr(
+        "y1sync.cli.backup_device",
+        lambda dev, root: backups.append(1) or (root / "stub"),
+    )
+
+    assert main(["sync", str(source)]) == 0
+    assert len(backups) == 1
+
+    on_device = device / "Music" / "top.mp3"
+    # Same bytes, timestamp moved well past FAT's 2s tolerance.
+    later = track.stat().st_mtime + 100
+    os.utime(track, (later, later))
+
+    capsys.readouterr()
+    assert main(["sync", str(source)]) == 0
+    out = capsys.readouterr().out
+
+    assert len(backups) == 1, "a restamp is metadata only -- no backup"
+    assert on_device.read_bytes() == b"identical audio bytes"
+    assert abs(on_device.stat().st_mtime - later) < 1
+    assert "timestamp" in out.lower()
+    assert "reindexing" not in out
+
+    capsys.readouterr()
+    assert main(["sync", str(source)]) == 0
+    out = capsys.readouterr().out
+    assert "up to date" in out.lower()
+    assert "corrected" not in out.lower()
+
+
 def test_sync_with_no_files_skips_the_reindexing_note(tmp_path, capsys, monkeypatch):
     device = _fake_device(tmp_path)
     source = tmp_path / "library"

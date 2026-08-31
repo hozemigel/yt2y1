@@ -13,7 +13,7 @@ from .artwork import artwork_url_for, fetch_artwork
 from .cache import ContentCache
 from .config import Config, load_config, save_config
 from .device import (
-    backup_device, find_devices, needs_copy, needs_transcode, safe_copy,
+    backup_device, copy_status, find_devices, needs_transcode, restamp, safe_copy,
 )
 from .formats import SUPPORTED_EXTENSIONS, device_target_name, find_audio
 from .identify import AcoustIDKeyRejected, acoustid_key, identify
@@ -486,14 +486,25 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
     def is_wav(path: Path) -> bool:
         return path.suffix.lower() == ".wav"
 
-    # A WAV's device copy is a re-encode, not a byte copy, so "is it
-    # already there" is a presence-and-mtime check rather than needs_copy's
-    # size comparison.
-    pending = [
-        path for path in files
-        if (needs_transcode if is_wav(path) else needs_copy)(path, destination(path))
-    ]
-    unchanged = len(files) - len(pending)
+    # A WAV's device copy is a re-encode, not a byte copy, so "is it already
+    # there" is a presence-and-mtime check (needs_transcode). Every other
+    # format is a byte copy, so copy_status can compare bytes and tell a real
+    # change apart from a re-tag that only moved the timestamp: the latter
+    # needs its mtime restamped, not the whole file pushed back over USB.
+    pending = []               # copied or transcoded onto the device
+    restampable = []           # identical bytes already there, mtime drifted
+    for path in files:
+        dst = destination(path)
+        if is_wav(path):
+            if needs_transcode(path, dst):
+                pending.append(path)
+        else:
+            status = copy_status(path, dst)
+            if status in ("absent", "differs"):
+                pending.append(path)
+            elif status == "stale-mtime":
+                restampable.append((path, dst))
+    unchanged = len(files) - len(pending) - len(restampable)
 
     if dry_run:
         for path in pending:
@@ -502,15 +513,38 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
                 print(f"  would convert  {rel} -> {device_target_name(rel)}")
             else:
                 print(f"  would copy  {rel}")
+        for path, _ in restampable:
+            print(f"  would restamp  {path.relative_to(source)}  "
+                  "(same audio, drifted timestamp)")
         print(f"\n{len(pending)} file(s) would be copied.")
+        if restampable:
+            print(f"{len(restampable)} file(s) already on the device; their "
+                  "timestamps would be corrected without recopying.")
         if unchanged:
             print(f"{unchanged} file(s) already on the device, unchanged.")
         return 0
 
+    def restamp_all() -> None:
+        for src_path, dst_path in restampable:
+            rel = src_path.relative_to(source)
+            try:
+                restamp(src_path, dst_path)
+                if verbose:
+                    print(f"  restamped  {rel}")
+            except OSError as exc:
+                print(f"  could not restamp {rel}: {exc}")
+
     if not pending:
         # Nothing would be written, so there's nothing to protect with a
-        # backup either -- see backup_device()'s docstring.
-        print(f"Already up to date -- {unchanged} file(s) unchanged. Safe to disconnect.")
+        # backup either -- see backup_device()'s docstring. Restamping is a
+        # directory-entry touch, not a data write, so it needs no backup.
+        restamp_all()
+        if restampable:
+            print(f"Already up to date -- corrected {len(restampable)} "
+                  f"timestamp(s), {unchanged} file(s) unchanged. Safe to disconnect.")
+        else:
+            print(f"Already up to date -- {unchanged} file(s) unchanged. "
+                  "Safe to disconnect.")
         return 0
 
     backup = backup_device(device, BACKUP_ROOT)
@@ -532,8 +566,15 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
             failures += 1
             print(f"  FAILED   {rel}: {exc}")
 
+    restamp_all()
+
     copied = len(pending) - failures
-    suffix = f", {unchanged} already up to date" if unchanged else ""
+    done = []
+    if unchanged:
+        done.append(f"{unchanged} already up to date")
+    if restampable:
+        done.append(f"{len(restampable)} timestamp(s) corrected")
+    suffix = f", {', '.join(done)}" if done else ""
     print(f"Copied {copied} file(s){suffix}. Safe to disconnect.")
     if copied:
         # Found on a real Y1: a freshly copied track was missing from the
