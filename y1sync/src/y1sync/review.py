@@ -44,6 +44,37 @@ def _matches_filename(title: str, stem: str) -> bool:
     return len(title_words & _title_words(stem)) / len(title_words) >= 0.5
 
 
+def _prefer_filename_match(ranked: list[Candidate], stem: str) -> list[Candidate]:
+    """Float the recording whose title matches the filename to the top.
+
+    AcoustID can split a near-tie across two *different* recordings (see
+    identify._expand_acoustid). Ranking then orders those recordings by a
+    confidence gap of a few thousandths -- close to a coin toss -- and the
+    loser of that toss can be the song the file's own name states it is.
+    When the top recording's title does not match the filename but exactly
+    one lower recording's does, the filename is the better evidence: move
+    that recording's releases to the front, leaving every candidate's
+    order otherwise intact so grouping still sees each recording
+    contiguous. Left alone when the top already matches (ranking got it
+    right), when nothing matches (the mismatch warning covers that), or
+    when more than one recording matches (evidence is ambiguous -- let the
+    user choose).
+    """
+    if not ranked or _matches_filename(ranked[0].meta.title, stem):
+        return ranked
+    matching = {
+        recording_identity(c)
+        for c in ranked
+        if c.meta.title and _matches_filename(c.meta.title, stem)
+    }
+    if len(matching) != 1:
+        return ranked
+    identity = next(iter(matching))
+    preferred = [c for c in ranked if recording_identity(c) == identity]
+    rest = [c for c in ranked if recording_identity(c) != identity]
+    return preferred + rest
+
+
 def _group_header(candidates: list[Candidate]) -> str:
     """The artist and title every candidate in a group shares.
 
@@ -108,6 +139,7 @@ def choose_candidate(
         return None
 
     ranked = rank_candidates(candidates)
+    ranked = _prefer_filename_match(ranked, Path(path).stem)
 
     # Grouped by recording (ranking already keeps each one's releases
     # contiguous), with a per-group cap on how many derivative releases

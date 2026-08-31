@@ -283,3 +283,75 @@ def test_a_filename_mismatch_without_a_fingerprint_does_not_claim_one():
     warning = [line for line in lines if "does not match the filename" in line]
     assert warning
     assert "Fingerprint" not in "\n".join(lines)
+
+
+def _amy(title, album, conf, date):
+    return Candidate(
+        meta=TrackMeta(artist="Amy Macdonald", title=title, album=album),
+        confidence=conf, source="acoustid", release_group_type="Album",
+        release_status="Official", release_date=date,
+    )
+
+
+def test_the_filename_breaks_a_near_tie_between_two_different_songs():
+    # Found on a real track: AcoustID split a near-tie across two
+    # recordings, and ranking put the marginally-higher-scored wrong song
+    # first -- so Enter, and the "option 1" tip, pointed at a song the
+    # file's own name says it is not.
+    options = [
+        _amy("Don’t Tell Me That It’s Over", "Don’t Tell Me That It’s Over",
+             0.9767, "2010-03-08"),
+        _amy("Slow It Down", "Slow It Down", 0.9747, "2022-05-06"),
+    ]
+    chosen = choose_candidate(
+        Path("Amy Macdonald - Slow It Down (Official Audio).mp3"), options,
+        input_fn=lambda _: "", output_fn=lambda *a: None,
+    )
+    assert chosen.meta.title == "Slow It Down"
+
+
+def test_the_filename_matching_song_is_listed_and_numbered_first():
+    options = [
+        _amy("Don’t Tell Me That It’s Over", "Don’t Tell Me That It’s Over",
+             0.9767, "2010-03-08"),
+        _amy("Slow It Down", "Slow It Down", 0.9747, "2022-05-06"),
+    ]
+    lines = []
+    first = choose_candidate(
+        Path("Amy Macdonald - Slow It Down (Official Audio).mp3"), options,
+        input_fn=lambda _: "1",
+        output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)),
+    )
+    assert first.meta.title == "Slow It Down"
+    shown = "\n".join(lines)
+    assert shown.index("Slow It Down") < shown.index("Don’t Tell Me That It’s Over")
+
+
+def test_a_near_tie_is_left_alone_when_the_top_song_already_matches():
+    # The promotion must not fire when ranking already has it right.
+    options = [
+        _amy("Slow It Down", "Slow It Down", 0.9767, "2022-05-06"),
+        _amy("Don’t Tell Me That It’s Over", "Don’t Tell Me That It’s Over",
+             0.9747, "2010-03-08"),
+    ]
+    chosen = choose_candidate(
+        Path("Amy Macdonald - Slow It Down (Official Audio).mp3"), options,
+        input_fn=lambda _: "", output_fn=lambda *a: None,
+    )
+    assert chosen.meta.title == "Slow It Down"
+
+
+def test_no_promotion_when_two_different_songs_both_match_the_filename():
+    # Ambiguous evidence -- leave ranking's order and let the user pick.
+    options = [
+        _amy("Slow It Down (Radio Edit)", "Single", 0.9767, "2010-01-01"),
+        _amy("Slow It Down", "A Curious Thing", 0.9747, "2010-03-08"),
+    ]
+    lines = []
+    choose_candidate(
+        Path("Amy Macdonald - Slow It Down.mp3"), options,
+        input_fn=lambda _: "s",
+        output_fn=lambda *a: lines.append(" ".join(str(x) for x in a)),
+    )
+    shown = "\n".join(lines)
+    assert shown.index("Slow It Down (Radio Edit)") < shown.index("A Curious Thing")
