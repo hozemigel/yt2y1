@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from y1sync.cli import (
+    PromptAbort,
     build_parser,
     cmd_check_for_updates,
     cmd_download_and_sync,
@@ -8,6 +11,7 @@ from y1sync.cli import (
     cmd_scan,
     discover_music_folders,
     main,
+    _prompt_bitrate,
 )
 from y1sync.config import Config, load_config, save_config
 from y1sync.models import Candidate, TrackMeta
@@ -954,6 +958,48 @@ def test_menu_rejects_an_invalid_choice_and_reprompts(tmp_path, monkeypatch):
     assert any("Enter a number" in line for line in lines)
 
 
+def test_menu_gives_up_after_a_wall_of_unrecognised_replies(tmp_path, monkeypatch):
+    # A multi-line paste dumped into the prompt otherwise redraws the menu
+    # once per junk line without end. The loop has to stop on its own.
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    lines = []
+    with pytest.raises(PromptAbort):
+        cmd_menu(input_fn=lambda _: "not a number", output_fn=lines.append)
+
+    assert any("giving up" in line.lower() for line in lines)
+    # It reprompted a bounded number of times, not hundreds.
+    assert lines.count("Enter a number from the list.") < 5
+
+
+def test_menu_miss_counter_resets_after_a_real_choice(tmp_path, monkeypatch):
+    # Scattered typos across a long session must not accumulate toward the
+    # give-up cap -- only unrecognised replies in an unbroken run do.
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+    monkeypatch.setattr("y1sync.cli.cmd_doctor", lambda: None)
+
+    replies = iter(["x", "x", "x", "x", "4", "x", "x", "x", "x", "6"])
+    result = cmd_menu(input_fn=lambda _: next(replies), output_fn=lambda *a: None)
+
+    assert result == 0
+
+
+def test_menu_aborts_on_end_of_input(tmp_path, monkeypatch):
+    path = _config_path(tmp_path)
+    monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
+    save_config(Config(music_folder=str(tmp_path)), path)
+
+    def eof(_):
+        raise EOFError
+
+    with pytest.raises(PromptAbort):
+        cmd_menu(input_fn=eof, output_fn=lambda *a: None)
+
+
 def test_menu_option_3_changes_the_saved_folder(tmp_path, monkeypatch):
     path = _config_path(tmp_path)
     monkeypatch.setattr("y1sync.config.default_config_path", lambda: path)
@@ -1073,6 +1119,21 @@ def test_download_bitrate_prompt_reasks_on_a_bad_choice(monkeypatch):
 
     assert captured["quality"] == "192"
     assert any("Enter 1-4" in line for line in lines)
+
+
+def test_bitrate_prompt_gives_up_after_too_many_bad_choices():
+    lines = []
+    with pytest.raises(PromptAbort):
+        _prompt_bitrate(input_fn=lambda _: "9", output_fn=lines.append)
+    assert any("giving up" in line.lower() for line in lines)
+
+
+def test_bitrate_prompt_aborts_on_end_of_input():
+    def eof(_):
+        raise EOFError
+
+    with pytest.raises(PromptAbort):
+        _prompt_bitrate(input_fn=eof, output_fn=lambda *a: None)
 
 
 def test_download_passes_the_folder_url_and_quality_through(tmp_path, monkeypatch):
@@ -1221,6 +1282,19 @@ def test_main_handles_a_keyboard_interrupt_cleanly(monkeypatch, capsys):
 
     assert result == 130
     assert "Cancelled." in capsys.readouterr().out
+
+
+def test_main_handles_a_prompt_abort_cleanly(monkeypatch, capsys):
+    # A prompt that bailed on EOF or a wall of junk has already explained
+    # itself; main() must exit on it, not re-raise a traceback.
+    def aborted():
+        raise PromptAbort
+
+    monkeypatch.setattr("y1sync.cli.cmd_menu", aborted)
+
+    result = main([])
+
+    assert result == 130
 
 
 # --- cmd_check_for_updates -------------------------------------------------

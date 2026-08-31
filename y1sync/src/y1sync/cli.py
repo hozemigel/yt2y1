@@ -239,7 +239,7 @@ def cmd_check_for_updates(input_fn=input, output_fn=print) -> int:
         for line in log.stdout.splitlines():
             output_fn(f"  {line}")
 
-    reply = input_fn("\nUpdate now? [Y/n]: ").strip().lower()
+    reply = _ask("\nUpdate now? [Y/n]: ", input_fn, output_fn).lower()
     if reply not in ("", "y", "yes"):
         output_fn("Not updating.")
         return 0
@@ -597,14 +597,46 @@ def cmd_sync(folder: str, dry_run: bool, verbose: bool) -> int:
     return 0
 
 
+# An interactive prompt re-asks whenever it doesn't recognise the reply.
+# Cap the re-asks: a stray multi-line paste -- an earlier screen pasted
+# back into the prompt, a URL dragged in with half a web page -- otherwise
+# feeds the loop hundreds of junk lines, each one redrawing the whole
+# menu. Hitting the cap, or stdin ending (EOFError, or a frontend that
+# just keeps handing back nothing), raises PromptAbort so the loop stops
+# instead of spinning.
+_MAX_PROMPT_RETRIES = 5
+
+
+class PromptAbort(Exception):
+    """A prompt gave up: stdin ended, or too many unrecognised replies."""
+
+
+def _ask(question: str, input_fn, output_fn) -> str:
+    """input_fn(question).strip(), with EOF turned into PromptAbort.
+
+    A prompt read from a closed or exhausted stdin otherwise raises a bare
+    EOFError that surfaces as a traceback. Callers pair this with the
+    retry cap above so buffered junk can neither crash the prompt nor
+    drive it without end.
+    """
+    try:
+        return input_fn(question).strip()
+    except EOFError:
+        output_fn("")
+        raise PromptAbort
+
+
 def _prompt_for_music_folder(input_fn=input, output_fn=print) -> str:
     """Ask the user to pick a music folder, save it, and return it.
 
     Offers folders actually found on disk as numbered choices, so a first
     run never requires typing a path -- the thing that prompted this menu
     in the first place, on a keyboard where "~" is its own small ordeal.
+
+    Raises PromptAbort if stdin ends or the reply is unrecognised
+    _MAX_PROMPT_RETRIES times running.
     """
-    while True:
+    for _ in range(_MAX_PROMPT_RETRIES):
         candidates = discover_music_folders(Path.home())
         output_fn("Where are your music files?")
         for index, folder in enumerate(candidates, start=1):
@@ -612,7 +644,7 @@ def _prompt_for_music_folder(input_fn=input, output_fn=print) -> str:
         manual_option = len(candidates) + 1
         output_fn(f"  {manual_option}. Enter a path manually")
 
-        reply = input_fn("Choose a number: ").strip()
+        reply = _ask("Choose a number: ", input_fn, output_fn)
         if not reply.isdigit():
             output_fn("Enter a number from the list.")
             continue
@@ -620,7 +652,7 @@ def _prompt_for_music_folder(input_fn=input, output_fn=print) -> str:
         if 1 <= choice <= len(candidates):
             folder = candidates[choice - 1]
         elif choice == manual_option:
-            typed = input_fn("Path to your music folder: ").strip()
+            typed = _ask("Path to your music folder: ", input_fn, output_fn)
             folder = Path(typed).expanduser()
             if not folder.is_dir():
                 output_fn(f"Not a folder: {folder}")
@@ -632,6 +664,8 @@ def _prompt_for_music_folder(input_fn=input, output_fn=print) -> str:
         config = load_config()
         save_config(Config(acoustid_key=config.acoustid_key, music_folder=str(folder)))
         return str(folder)
+    output_fn("Too many tries — giving up.")
+    raise PromptAbort
 
 
 def _load_yt2mp3():
@@ -660,13 +694,17 @@ _BITRATE_OPTIONS = [
 
 
 def _prompt_bitrate(input_fn=input, output_fn=print) -> str | None:
-    """Ask for an MP3 bitrate. Returns the kbps string, or None if cancelled."""
-    while True:
+    """Ask for an MP3 bitrate. Returns the kbps string, or None if cancelled.
+
+    Raises PromptAbort if stdin ends or the reply is unrecognised
+    _MAX_PROMPT_RETRIES times running.
+    """
+    for _ in range(_MAX_PROMPT_RETRIES):
         output_fn("Bitrate:")
         for index, (label, _kbps) in enumerate(_BITRATE_OPTIONS, start=1):
             output_fn(f"  {index}. {label}")
         output_fn("  0. Cancel")
-        reply = input_fn("Choose a number [1]: ").strip()
+        reply = _ask("Choose a number [1]: ", input_fn, output_fn)
         if reply == "":
             return _BITRATE_OPTIONS[0][1]
         if reply == "0":
@@ -674,6 +712,8 @@ def _prompt_bitrate(input_fn=input, output_fn=print) -> str | None:
         if reply.isdigit() and 1 <= int(reply) <= len(_BITRATE_OPTIONS):
             return _BITRATE_OPTIONS[int(reply) - 1][1]
         output_fn(f"Enter 1-{len(_BITRATE_OPTIONS)}, or 0 to cancel.")
+    output_fn("Too many tries — giving up.")
+    raise PromptAbort
 
 
 def cmd_download_and_sync(folder: str, input_fn=input, output_fn=print) -> int:
@@ -695,7 +735,7 @@ def cmd_download_and_sync(folder: str, input_fn=input, output_fn=print) -> int:
         output_fn(str(exc))
         return 1
 
-    url = input_fn("YouTube URL (or 0 to cancel): ").strip()
+    url = _ask("YouTube URL (or 0 to cancel): ", input_fn, output_fn)
     if url in ("", "0"):
         output_fn("Cancelled.")
         return 0
@@ -741,6 +781,7 @@ def cmd_menu(input_fn=input, output_fn=print) -> int:
     config = load_config()
     folder = config.music_folder or _prompt_for_music_folder(input_fn, output_fn)
 
+    misses = 0
     while True:
         output_fn("")
         output_fn("1. Download from YouTube  (then tag and send to player)")
@@ -749,7 +790,7 @@ def cmd_menu(input_fn=input, output_fn=print) -> int:
         output_fn("4. Check setup")
         output_fn("5. Check for updates")
         output_fn("6. Quit")
-        reply = input_fn("Choose a number: ").strip()
+        reply = _ask("Choose a number: ", input_fn, output_fn)
 
         if reply == "1":
             cmd_download_and_sync(folder, input_fn, output_fn)
@@ -768,7 +809,16 @@ def cmd_menu(input_fn=input, output_fn=print) -> int:
         elif reply == "6":
             return 0
         else:
+            # Count only unrecognised replies in a row -- a real choice
+            # resets it -- so a genuine session never trips the cap but a
+            # wall of pasted junk still ends the loop.
+            misses += 1
+            if misses >= _MAX_PROMPT_RETRIES:
+                output_fn("Too many tries — giving up.")
+                raise PromptAbort
             output_fn("Enter a number from the list.")
+            continue
+        misses = 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -790,6 +840,10 @@ def main(argv: list[str] | None = None) -> int:
         # it. Without this, that Ctrl+C reaches input() unhandled and dumps
         # a raw traceback instead of just... stopping.
         print("\nCancelled.")
+        return 130
+    except PromptAbort:
+        # A prompt hit EOF or a wall of unrecognised replies and bailed
+        # (it has already said why). End quietly rather than by traceback.
         return 130
 
 
